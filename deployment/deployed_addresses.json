@@ -1,0 +1,10 @@
+{
+  "studionet": {
+    "contract_address": "0x70B0CBB3A9A199f01aD2E1382ECE1b99B989a5CF",
+    "deployed_at": "2026-06-18T00:00:00+07:00",
+    "deployment_tx_hash": "0xc9cc2f0da882bc35297910a67d05776fc3d19a92d7101704e58d63b3947541f3",
+    "deployer_address": "0x3ceAaaBDdF16d1E05d51fB5E93C86e11d4E5F5Bd",
+    "abi_hash": "sha256:5580ec773c915ee7f68fbf08cb5302b117dee69f55ffaeaa483d2e9dac7346f1",
+    "notes": "Fresh resubmission deployment on 2026-06-18 using the hardened LicenseLogic contract with comparative consensus, safe storage reads, deterministic hashing, and withdrawable accounting."
+  }
+}

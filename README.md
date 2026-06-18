@@ -1,42 +1,56 @@
 # LicenseLogic
 
-Autonomous IP licensing and infringement enforcement on GenLayer.
+LicenseLogic only works on GenLayer because it needs three things Solidity cannot do: fetch live web pages during execution, make subjective similarity judgments with LLMs, and force that judgment through validator consensus instead of trusting a single model.
 
-## What It Does
+The project lets creators register original works, sell usage licenses, and scan arbitrary suspect URLs for infringement. The contract records verdicts, similarity scores, and scan reasoning on-chain while preserving a validator-safe fallback path when live fetches fail.
 
-LicenseLogic is an Intelligent Contract that lets creators:
+## Current Status
 
-1. **Register** an original work (article, code, design) with a canonical URL and description
-2. **License** the work — other users pay on-chain to obtain usage rights
-3. **Scan** any suspect URL for infringement — the contract fetches the page, reads its content, and uses LLM consensus to judge whether it copies the registered work
-4. **Enforce** automatically — confirmed infringements are recorded on-chain with similarity scores and reasoning
+- Live frontend: [license-logic.vercel.app](https://license-logic.vercel.app)
+- Contract runtime fixes applied for GenVM v0.2.16 compatibility
+- Direct-mode `gltest` suite added under [`tests/`](tests/)
+- Deployment evidence scaffold added under [`deployment/`](deployment/)
 
-## GenLayer Powers Used
+## What Changed For Resubmission
 
-- **Live web rendering** (`gl.nondet.web.render`) — the contract reads arbitrary web pages at judgment time, not just static on-chain data
-- **LLM-based semantic analysis** (`gl.nondet.exec_prompt`) — subjective similarity judgment that understands paraphrasing, structural copying, and content derivation
-- **Optimistic Democracy consensus** (`gl.vm.run_nondet_unsafe`) — leader proposes a verdict, validators independently re-judge and confirm the verdict bucket matches
+- Replaced unsafe validator fallback with `gl.eq_principle.prompt_comparative`
+- Added class-level scalar declarations for persistent fields
+- Replaced Python `hash()` with deterministic `sha256`
+- Guarded storage reads with `.get(..., default)` to avoid TreeMap crashes
+- Switched all contract errors to `gl.vm.UserError`
+- Added pull-based withdrawal accounting so license fees and bounty rewards are not trapped
+- Added prompt-injection canary handling and graceful `fetch_failed` degradation
 
-## Why Solidity Can't Do This
+## Test Coverage
 
-Traditional smart contracts (Solidity/EVM) are purely deterministic. They cannot:
+The repo now includes 8 test modules covering registration, purchases, scanning, consensus rules, prompt injection, treasury invariants, edge cases, and end-to-end flow.
 
-- Fetch external web pages during execution
-- Make subjective judgments about content similarity
-- Handle the nuance of "is this a copy or just similar?"
-
-LicenseLogic requires both **live web access** and **semantic reasoning** — capabilities unique to GenLayer's Intelligent Contracts.
-
-## Project Structure
-
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install genlayer-test
+.venv/bin/pytest tests -q
 ```
+
+Latest local result:
+
+```text
+35 passed, 1 skipped
+```
+
+## Project Layout
+
+```text
 contracts/
-  license_logic.py   — main Intelligent Contract
-  storage_test.py    — minimal sanity contract (deploy first)
-DEPLOY.md            — deployment procedure & troubleshooting
-test_inputs.md       — sample inputs for Studio testing
+  license_logic.py
+  storage_test.py
+tests/
+deployment/
+frontend/
+DEPLOY.md
+test_inputs.md
+CHANGELOG.md
 ```
 
-## Quick Start
+## Reproducible Deployment
 
-See [DEPLOY.md](DEPLOY.md) for the full deployment procedure.
+See [`DEPLOY.md`](DEPLOY.md) for the operator checklist and [`deployment/reproducible_steps.md`](deployment/reproducible_steps.md) for the resubmission-friendly sequence with expected outcomes and artifact locations.
