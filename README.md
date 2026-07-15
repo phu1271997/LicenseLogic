@@ -6,27 +6,24 @@ The project lets creators register original works, sell usage licenses, and scan
 
 ## Current Status
 
-- Live frontend: [license-logic.vercel.app](https://license-logic.vercel.app)
-- Contract runtime fixes applied for GenVM v0.2.16 compatibility
-- Direct-mode `gltest` suite added under [`tests/`](tests/)
-- Deployment evidence scaffold added under [`deployment/`](deployment/)
+- Contract compiled and tested against GenVM v0.2.16 (`40 passed, 1 skipped`)
+- Reviewer-flagged runtime bugs fixed (see [CHANGELOG.md](CHANGELOG.md))
+- New Studionet deployment (2026-07-15): [`0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7`](https://studio.genlayer.com/contracts/0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7)
+- Live frontend: [https://license-logic.vercel.app](https://license-logic.vercel.app)
 
-## What Changed For Resubmission
+## Reviewer Feedback Addressed (2026-07-15 resubmission)
 
-- Replaced unsafe validator fallback with `gl.eq_principle.prompt_comparative`
-- Added class-level scalar declarations for persistent fields
-- Replaced Python `hash()` with deterministic `sha256`
-- Guarded storage reads with `.get(..., default)` to avoid TreeMap crashes
-- Switched all contract errors to `gl.vm.UserError`
-- Added pull-based withdrawal accounting so license fees and bounty rewards are not trapped
-- Added prompt-injection canary handling and graceful `fetch_failed` degradation
+- **Frontend 404** — added env fallback, explorer link in header, browse tab, `.env.example`, and step-by-step Vercel deploy instructions in `frontend/README.md` so a redeploy is a five-minute task
+- **Contract errors on explorer** — replaced the EVM `_Recipient` transfer path with the native `gl.get_contract_at(...).emit_transfer(...)`, wrapped `exec_prompt` in try/except, added `__receive__` for stray transfers, and switched `evaluate_scan` to return a JSON string so `prompt_comparative` compares payloads the validator LLM can actually read
+- **Stronger validator fallback** — the consensus principle now explicitly forces `UNCERTAIN` when either side reports `fetch_failed=true` or `injection_attempt=true`
+- **More reproducible deployment evidence** — see [`deployment/deployment_log.md`](deployment/deployment_log.md) for the redeploy playbook and expected on-chain assertions
 
 ## Test Coverage
 
-The repo now includes 8 test modules covering registration, purchases, scanning, consensus rules, prompt injection, treasury invariants, edge cases, and end-to-end flow.
+Nine test modules cover registration, purchases, scanning, consensus rules, prompt injection, treasury invariants, edge cases, end-to-end flow, and the new views.
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install genlayer-test
 .venv/bin/pytest tests -q
 ```
@@ -34,7 +31,7 @@ python3.12 -m venv .venv
 Latest local result:
 
 ```text
-35 passed, 1 skipped
+40 passed, 1 skipped
 ```
 
 ## Project Layout

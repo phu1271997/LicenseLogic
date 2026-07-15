@@ -1,5 +1,53 @@
 # Deployment Log
 
+## 2026-07-15 Third Resubmission Deployment
+
+- Network: `studionet`
+- Contract address: `0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7`
+- Deployment tx hash: `PENDING_FILL`
+- Deployer wallet: `PENDING_FILL`
+- Contract file: `contracts/license_logic.py`
+- Status: deployed by operator on 2026-07-15; explorer verification pending
+- Live frontend URL: https://license-logic.vercel.app
+
+Verification checklist:
+
+- [ ] `register_work` with the Photosynthesis sample from `reproducible_steps.md`
+- [ ] `purchase_license` at exact price + overpayment
+- [ ] `scan_for_infringement` self-scan → `INFRINGEMENT`
+- [ ] `scan_for_infringement` unrelated URL → `CLEAR` / `UNCERTAIN`
+- [ ] `scan_for_infringement` unreachable URL → `UNCERTAIN` with `fetch_failed=true`
+- [ ] `list_works()` returns the seeded set
+- [ ] `get_last_verdict_by_url(...)` returns the JSON verdict without client-side hashing
+- [ ] Bare native transfer → `__receive__` credits sender balance
+- [ ] `withdraw()` zeroes the balance and returns the native tokens
+
+## 2026-07-15 Second Resubmission (post reviewer feedback)
+
+Reviewer feedback:
+
+1. `Gen. Dave` (2026-07-03): live app link 404s.
+2. `Joaquin` (2026-06-11): fix explorer-observable contract errors and add stronger validator fallback.
+
+Changes shipped in this build:
+
+- `_Recipient` EVM interface removed. Native transfers now go through `gl.get_contract_at(addr).emit_transfer(value=amount)` — the canonical GenVM path for value transfers that also targets EOAs correctly on the ZKsync-backed testnet.
+- `evaluate_scan` now returns a JSON **string** (not a `dict`). This gives `gl.eq_principle.prompt_comparative` a human-readable payload to compare across validators, so the principle text can reason about the verdict bucket and similarity score in plain language.
+- `gl.nondet.exec_prompt` is now wrapped in `try/except` so an LLM failure degrades to `UNCERTAIN` instead of aborting the transaction.
+- Added `__receive__` so unexpected native transfers to the contract are credited to the sender's withdrawable balance instead of trapping funds.
+- Added `list_works` view so the frontend and reviewers can enumerate the entire on-chain state without knowing work IDs.
+- Added `get_last_verdict_by_url` view so callers can look up the last verdict by suspect URL without recomputing the sha256 keccak on the client.
+- Updated `CONSENSUS_PRINCIPLE` to explicitly instruct the validator that the payload is JSON and to enforce `fetch_failed=true` → `UNCERTAIN` on either side.
+
+Frontend fixes:
+
+- `NEXT_PUBLIC_CONTRACT_ADDRESS` now falls back to the deployed studionet address when missing, so a fresh Vercel project without env vars still renders and reads chain state instead of 404-ing.
+- Header shows an explorer link + network label sourced from env.
+- Added Browse tab that calls the new `list_works` view.
+- Added `frontend/.env.example` and `frontend/README.md` with Vercel deploy steps.
+
+Redeploy required: bump `contracts/license_logic.py` to the studionet, update the address below, and re-run the manual explorer checks in `reproducible_steps.md`.
+
 ## 2026-06-18 Resubmission Deployment
 
 - Network: `studionet`
