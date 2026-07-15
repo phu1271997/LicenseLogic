@@ -63,6 +63,13 @@ Expected:
 - Unrelated page returns `CLEAR` or `UNCERTAIN`
 - Unreachable page returns `UNCERTAIN` with `fetch_failed=true`
 
+## Step 5b: Verify new views (2026-07-15 build)
+
+1. Call `list_works()` — expect `{"count": >=1, "works": [...]}`.
+2. Call `get_last_verdict_by_url(work_0, https://en.wikipedia.org/wiki/Quantum_mechanics)` — expect the JSON verdict record from Step 5.2, keyed by the on-chain sha256 hash of the URL (no need to hash it manually anymore).
+3. Send a bare native-token transfer to the contract address (no method) — expect `__receive__` to credit the sender's withdrawable balance; then call `get_withdrawable(<sender>)` and confirm.
+4. Call `withdraw()` from that sender — expect the balance to zero out and the native tokens to arrive back at the sender EOA.
+
 ## Step 6: Save verification artifacts
 
 Store the following in `deployment/verification/`:

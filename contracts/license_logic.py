@@ -11,26 +11,20 @@ ZERO_ADDR = Address("0x0000000000000000000000000000000000000000")
 U256_MAX = (1 << 256) - 1
 VALID_VERDICTS = {"INFRINGEMENT", "CLEAR", "UNCERTAIN"}
 CONSENSUS_PRINCIPLE = (
-    "Validators MUST agree on the verdict bucket. "
-    "(1) INFRINGEMENT and CLEAR are NEVER compatible. "
-    "(2) UNCERTAIN is adjacent to both INFRINGEMENT and CLEAR. "
-    "(3) similarity score must be within 25 points across validators and "
-    "must align with the verdict bucket: similarity >= 70 implies "
-    "INFRINGEMENT, similarity < 40 implies CLEAR, otherwise UNCERTAIN. "
-    "(4) Minor wording differences in reasoning and matched_elements are "
-    "acceptable. (5) If web fetch fails, the result must remain UNCERTAIN "
-    "with fetch_failed=true; validators must not blanket-accept a conflicting "
-    "leader result."
+    "Both leader and validator return a JSON string with fields "
+    "{verdict, similarity, reasoning, matched_elements, fetch_failed, injection_attempt}. "
+    "Judge equivalence by content of that JSON, not by exact text: "
+    "(1) The verdict bucket MUST match. INFRINGEMENT and CLEAR are NEVER compatible. "
+    "UNCERTAIN is adjacent to both INFRINGEMENT and CLEAR, but a definitive verdict on one side "
+    "vs UNCERTAIN on the other is still disagreement. "
+    "(2) The similarity integer must be within 25 points between leader and validator and must "
+    "match its bucket: similarity >= 70 implies INFRINGEMENT, similarity < 40 implies CLEAR, "
+    "otherwise UNCERTAIN. "
+    "(3) fetch_failed booleans must agree; if either side reports fetch_failed=true the accepted "
+    "verdict MUST remain UNCERTAIN. "
+    "(4) injection_attempt booleans must agree when true; a detected injection forces UNCERTAIN. "
+    "(5) reasoning and matched_elements may differ in wording without breaking equivalence."
 )
-
-
-@gl.evm.contract_interface
-class _Recipient:
-    class View:
-        pass
-
-    class Write:
-        pass
 
 
 def clean_llm_json(text: str) -> dict:
@@ -271,9 +265,9 @@ class Contract(gl.Contract):
         if not original_desc:
             raise gl.vm.UserError(f"Work {work_id} description missing")
 
-        def evaluate_scan() -> dict:
+        def evaluate_scan() -> str:
             if clean_suspect_url == original_url:
-                return {
+                payload = {
                     "verdict": "INFRINGEMENT",
                     "similarity": 100,
                     "reasoning": "Suspect URL matches the registered work URL exactly.",
@@ -281,11 +275,12 @@ class Contract(gl.Contract):
                     "fetch_failed": False,
                     "injection_attempt": False,
                 }
+                return json.dumps(payload, sort_keys=True)
 
             try:
                 page_html = gl.nondet.web.render(clean_suspect_url, mode="html")
             except Exception as exc:
-                return {
+                payload = {
                     "verdict": "UNCERTAIN",
                     "similarity": 50,
                     "reasoning": f"Unable to fetch suspect URL: {str(exc)[:200]}",
@@ -293,16 +288,29 @@ class Contract(gl.Contract):
                     "fetch_failed": True,
                     "injection_attempt": False,
                 }
+                return json.dumps(payload, sort_keys=True)
 
             text = re.sub(r"<[^>]+>", " ", str(page_html))
             text = re.sub(r"\s+", " ", text).strip()
             prompt = build_analysis_prompt(original_desc, text)
-            raw = gl.nondet.exec_prompt(prompt, response_format="json")
+
+            try:
+                raw = gl.nondet.exec_prompt(prompt, response_format="json")
+            except Exception as exc:
+                payload = {
+                    "verdict": "UNCERTAIN",
+                    "similarity": 50,
+                    "reasoning": f"LLM call failed: {str(exc)[:200]}",
+                    "matched_elements": "none",
+                    "fetch_failed": False,
+                    "injection_attempt": False,
+                }
+                return json.dumps(payload, sort_keys=True)
 
             raw_as_text = raw if isinstance(raw, str) else json.dumps(raw, sort_keys=True)
             canary = canary_token(original_desc, text)
             if canary in raw_as_text:
-                return {
+                payload = {
                     "verdict": "UNCERTAIN",
                     "similarity": 50,
                     "reasoning": "Prompt injection detected in model output.",
@@ -310,11 +318,12 @@ class Contract(gl.Contract):
                     "fetch_failed": False,
                     "injection_attempt": True,
                 }
+                return json.dumps(payload, sort_keys=True)
 
             try:
                 data = clean_llm_json(raw)
             except (json.JSONDecodeError, ValueError) as exc:
-                return {
+                payload = {
                     "verdict": "UNCERTAIN",
                     "similarity": 50,
                     "reasoning": f"LLM output could not be parsed safely: {str(exc)[:200]}",
@@ -322,13 +331,14 @@ class Contract(gl.Contract):
                     "fetch_failed": False,
                     "injection_attempt": False,
                 }
+                return json.dumps(payload, sort_keys=True)
 
             similarity = parse_score(data)
             verdict = normalise_verdict(data.get("verdict", ""), similarity)
             reasoning = str(data.get("reasoning", ""))[:500]
             matched = str(data.get("matched_elements", ""))[:500]
 
-            return {
+            payload = {
                 "verdict": verdict,
                 "similarity": similarity,
                 "reasoning": reasoning or "No reasoning provided.",
@@ -336,17 +346,27 @@ class Contract(gl.Contract):
                 "fetch_failed": False,
                 "injection_attempt": False,
             }
+            return json.dumps(payload, sort_keys=True)
 
-        result = gl.eq_principle.prompt_comparative(
+        consensus_json = gl.eq_principle.prompt_comparative(
             evaluate_scan,
             principle=CONSENSUS_PRINCIPLE,
         )
 
-        verdict_str = normalise_verdict(
-            result.get("verdict", "UNCERTAIN"),
-            int(result.get("similarity", 50)),
-        )
+        try:
+            result = json.loads(consensus_json) if isinstance(consensus_json, str) else consensus_json
+        except (json.JSONDecodeError, TypeError):
+            result = {
+                "verdict": "UNCERTAIN",
+                "similarity": 50,
+                "reasoning": "Consensus returned unparseable payload.",
+                "matched_elements": "none",
+                "fetch_failed": True,
+                "injection_attempt": False,
+            }
+
         similarity = parse_score(result)
+        verdict_str = normalise_verdict(result.get("verdict", "UNCERTAIN"), similarity)
         fetch_failed = bool(result.get("fetch_failed", False))
         reasoning = str(result.get("reasoning", ""))[:500]
         matched = str(result.get("matched_elements", ""))[:500]
@@ -389,8 +409,13 @@ class Contract(gl.Contract):
         if int(amount) == 0:
             raise gl.vm.UserError("No balance to withdraw")
         self.withdrawable_balance[key] = u256(0)
-        _Recipient(gl.message.sender_address).emit_transfer(value=amount)
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(value=amount)
         return amount
+
+    def __receive__(self) -> None:
+        if int(gl.message.value) > 0:
+            self.total_received = checked_add(self.total_received, int(gl.message.value))
+            self._credit_address(gl.message.sender_address, gl.message.value)
 
     @gl.public.view
     def has_license(self, work_id: str, addr: str) -> bool:
@@ -452,3 +477,29 @@ class Contract(gl.Contract):
             key,
             json.dumps({"error": "No verdict found for this key"}, sort_keys=True),
         )
+
+    @gl.public.view
+    def get_last_verdict_by_url(self, work_id: str, suspect_url: str) -> str:
+        clean = normalise_url(suspect_url)
+        return self.get_last_verdict(work_id, deterministic_hash(clean))
+
+    @gl.public.view
+    def list_works(self) -> str:
+        works = []
+        for index in range(int(self.work_counter)):
+            work_id = f"work_{index}"
+            owner = self.owners.get(work_id, ZERO_ADDR)
+            if owner == ZERO_ADDR:
+                continue
+            works.append(
+                {
+                    "work_id": work_id,
+                    "owner": str(owner),
+                    "work_url": self.work_url.get(work_id, ""),
+                    "license_price": int(self.license_price.get(work_id, u256(0))),
+                    "penalty_amount": int(self.penalty_amount.get(work_id, u256(0))),
+                    "infringement_count": int(self.infringement_count.get(work_id, u256(0))),
+                    "bounty_pool": int(self.infringement_bounty.get(work_id, u256(0))),
+                }
+            )
+        return json.dumps({"count": len(works), "works": works}, sort_keys=True)

@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## 2026-07-15 — Second Resubmission (post-reviewer feedback)
+
+### Contract Fixes Surfaced By Explorer Review
+
+1. Removed the `_Recipient` EVM contract interface. Native token transfers in `withdraw()` now go through `gl.get_contract_at(sender).emit_transfer(value=amount)` — the canonical GenVM path that works for EOAs.
+2. `evaluate_scan` returns a JSON string, so `gl.eq_principle.prompt_comparative` compares a payload the validator LLM can actually read. The prior `dict` return was serialized to opaque calldata bytes for principle comparison.
+3. Wrapped `gl.nondet.exec_prompt` in `try/except` so LLM errors degrade to `UNCERTAIN` instead of reverting the transaction.
+4. Added `__receive__` so accidental native transfers to the contract are credited to the sender's withdrawable balance.
+5. Refined `CONSENSUS_PRINCIPLE` to describe the JSON payload and to force `UNCERTAIN` when either side reports `fetch_failed=true` or `injection_attempt=true`.
+
+### New Views
+
+- `list_works()` returns the full registry of works for browsing.
+- `get_last_verdict_by_url(work_id, suspect_url)` hashes the URL on-chain so clients don't have to.
+
+### Frontend Fixes
+
+- `NEXT_PUBLIC_CONTRACT_ADDRESS` now falls back to the deployed studionet address if unset — a Vercel project with no env vars no longer 404s or crashes on load.
+- Header shows a network label and clickable explorer link.
+- New "Browse Works" tab uses the on-chain `list_works` view.
+- Added `frontend/.env.example` and updated `frontend/README.md` with Vercel deploy instructions.
+
+### Tests
+
+- New `tests/test_views_and_receive.py` covers `list_works`, `get_last_verdict_by_url`, `__receive__`, and JSON-string round-tripping.
+- Local run: `40 passed, 1 skipped`.
+
 ## Unreleased Resubmission Fixes
 
 ### Runtime Bugs Fixed

@@ -1,36 +1,32 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LicenseLogic Frontend
 
-## Getting Started
+Next.js dApp wired to the LicenseLogic Intelligent Contract on the GenLayer Studionet.
 
-First, run the development server:
+## Local dev
 
 ```bash
+cp .env.example .env.local
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `NEXT_PUBLIC_CONTRACT_ADDRESS` | Deployed LicenseLogic contract address | `0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7` |
+| `NEXT_PUBLIC_NETWORK_LABEL` | Label shown in header | `Studionet` |
+| `NEXT_PUBLIC_EXPLORER_BASE` | Explorer link prefix | `https://studio.genlayer.com/contracts` |
 
-## Learn More
+The client falls back to the hardcoded studionet address if no env is set — the app still renders and reads contract state without any `.env` file.
 
-To learn more about Next.js, take a look at the following resources:
+## Deploy to Vercel
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. `vercel login`
+2. From `frontend/`, run `vercel --prod` (or import the repo through the Vercel dashboard, root directory `frontend`).
+3. Set the three env vars above under Project → Settings → Environment Variables (Production + Preview).
+4. Redeploy so the new envs get baked into the build.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+If the previous URL 404s, the project was removed — create a new one.

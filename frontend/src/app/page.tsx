@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { readContract, writeContract, CONTRACT_ADDRESS } from "@/lib/genlayer";
+import {
+  readContract,
+  writeContract,
+  CONTRACT_ADDRESS,
+  NETWORK_LABEL,
+  explorerUrl,
+} from "@/lib/genlayer";
 
 // ── Types ──
 interface WorkInfo {
@@ -22,7 +28,17 @@ interface Verdict {
   suspect_url: string;
 }
 
-type Tab = "register" | "license" | "scan" | "view";
+interface WorkSummary {
+  work_id: string;
+  owner: string;
+  work_url: string;
+  license_price: number;
+  penalty_amount: number;
+  infringement_count: number;
+  bounty_pool: number;
+}
+
+type Tab = "register" | "license" | "scan" | "view" | "browse";
 
 // ── Verdict badge ──
 function VerdictBadge({ verdict }: { verdict: string }) {
@@ -86,11 +102,15 @@ export default function Home() {
   const [viewWorkId, setViewWorkId] = useState("");
   const [workInfo, setWorkInfo] = useState<WorkInfo | null>(null);
 
+  // Browse
+  const [browseList, setBrowseList] = useState<WorkSummary[] | null>(null);
+
   const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: "register", label: "Register Work", icon: "+" },
     { key: "license", label: "Purchase License", icon: "$" },
     { key: "scan", label: "Scan Infringement", icon: "?" },
     { key: "view", label: "View Work", icon: "i" },
+    { key: "browse", label: "Browse Works", icon: "☰" },
   ];
 
   async function handleRegister(e: React.FormEvent) {
@@ -174,6 +194,32 @@ export default function Home() {
     }
   }
 
+  async function handleBrowse() {
+    setLoading(true);
+    setStatus(null);
+    setBrowseList(null);
+    try {
+      const result = await readContract("list_works", []);
+      const parsed = (
+        typeof result === "string"
+          ? JSON.parse(result)
+          : (result as unknown)
+      ) as { count: number; works: WorkSummary[] };
+      setBrowseList(parsed.works);
+      setStatus({
+        type: "success",
+        msg: `Loaded ${parsed.count} registered work(s)`,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Failed to load list: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleView(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -224,10 +270,15 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2 text-xs text-muted">
             <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-            <span className="hidden sm:inline">Studio</span>
-            <code className="bg-card px-2 py-0.5 rounded text-[10px] border border-card-border hidden md:inline">
-              {CONTRACT_ADDRESS?.slice(0, 6)}...{CONTRACT_ADDRESS?.slice(-4)}
-            </code>
+            <span className="hidden sm:inline">{NETWORK_LABEL}</span>
+            <a
+              href={explorerUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-card px-2 py-0.5 rounded text-[10px] border border-card-border hidden md:inline hover:text-accent"
+            >
+              {CONTRACT_ADDRESS?.slice(0, 6)}…{CONTRACT_ADDRESS?.slice(-4)}
+            </a>
           </div>
         </div>
       </header>
@@ -547,6 +598,81 @@ export default function Home() {
                   <p className="text-xs text-muted mb-1">Description</p>
                   <p className="text-sm">{workInfo.work_desc}</p>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+        {/* Browse */}
+        {activeTab === "browse" && (
+          <div className="bg-card border border-card-border rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold mb-1">Browse Registered Works</h2>
+                <p className="text-muted text-sm">
+                  Snapshot of every work on this contract, pulled from the on-chain
+                  <code className="mx-1">list_works</code> view.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleBrowse}
+                disabled={loading}
+                className="px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                {loading ? "Loading…" : browseList ? "Refresh" : "Load Works"}
+              </button>
+            </div>
+
+            {browseList && browseList.length === 0 && (
+              <p className="text-sm text-muted">No works registered yet.</p>
+            )}
+
+            {browseList && browseList.length > 0 && (
+              <div className="space-y-3">
+                {browseList.map((w) => (
+                  <div
+                    key={w.work_id}
+                    className="p-4 bg-black/30 border border-card-border rounded-xl"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono text-sm font-bold">{w.work_id}</span>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full border ${
+                          w.infringement_count > 0
+                            ? "bg-red-500/10 border-red-500/30 text-red-400"
+                            : "bg-green-500/10 border-green-500/30 text-green-400"
+                        }`}
+                      >
+                        {w.infringement_count} infringement(s)
+                      </span>
+                    </div>
+                    <a
+                      href={w.work_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-accent break-all hover:text-accent-hover"
+                    >
+                      {w.work_url}
+                    </a>
+                    <div className="grid grid-cols-3 gap-3 mt-3 text-xs">
+                      <div>
+                        <p className="text-muted mb-0.5">License</p>
+                        <p className="font-mono">{w.license_price} wei</p>
+                      </div>
+                      <div>
+                        <p className="text-muted mb-0.5">Penalty</p>
+                        <p className="font-mono">{w.penalty_amount} wei</p>
+                      </div>
+                      <div>
+                        <p className="text-muted mb-0.5">Bounty pool</p>
+                        <p className="font-mono">{w.bounty_pool} wei</p>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-muted mt-2 break-all font-mono">
+                      Owner: {w.owner}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
           </div>

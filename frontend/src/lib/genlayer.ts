@@ -1,10 +1,18 @@
 import { createClient, createAccount } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 
-export const CONTRACT_ADDRESS = process.env
-  .NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
+const FALLBACK_ADDRESS = "0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7";
 
-// Create a default account for read operations and demo writes
+export const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ||
+  FALLBACK_ADDRESS) as `0x${string}`;
+
+export const NETWORK_LABEL =
+  process.env.NEXT_PUBLIC_NETWORK_LABEL || "Studionet";
+
+export const EXPLORER_BASE =
+  process.env.NEXT_PUBLIC_EXPLORER_BASE ||
+  "https://studio.genlayer.com/contracts";
+
 const account = createAccount();
 
 export const client = createClient({
@@ -40,4 +48,9 @@ export async function writeContract(
   });
 
   return { hash, receipt };
+}
+
+export function explorerUrl(address: string = CONTRACT_ADDRESS): string {
+  const base = EXPLORER_BASE.replace(/\/$/, "");
+  return `${base}/${address}`;
 }
