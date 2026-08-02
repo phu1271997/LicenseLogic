@@ -4,9 +4,12 @@ import { useState } from "react";
 import {
   readContract,
   writeContract,
+  readWithRetry,
   CONTRACT_ADDRESS,
   NETWORK_LABEL,
   explorerUrl,
+  txExplorerUrl,
+  type WriteResult,
 } from "@/lib/genlayer";
 
 // ── Types ──
@@ -39,6 +42,11 @@ interface WorkSummary {
 }
 
 type Tab = "register" | "license" | "scan" | "view" | "browse";
+
+function normaliseWorkId(raw: string): string {
+  const trimmed = raw.trim();
+  return /^\d+$/.test(trimmed) ? `work_${trimmed}` : trimmed;
+}
 
 // ── Verdict badge ──
 function VerdictBadge({ verdict }: { verdict: string }) {
@@ -74,13 +82,36 @@ function SimilarityBar({ score }: { score: number }) {
   );
 }
 
+interface StatusMsg {
+  type: "success" | "error" | "info" | "warn";
+  msg: string;
+  txHash?: string;
+}
+
+function statusClasses(type: StatusMsg["type"]): string {
+  switch (type) {
+    case "success":
+      return "bg-green-500/10 border-green-500/30 text-green-400";
+    case "error":
+      return "bg-red-500/10 border-red-500/30 text-red-400";
+    case "warn":
+      return "bg-yellow-500/10 border-yellow-500/30 text-yellow-300";
+    default:
+      return "bg-blue-500/10 border-blue-500/30 text-blue-400";
+  }
+}
+
+function describeWait(w: WriteResult["wait"]): string {
+  if (w.timedOut)
+    return `chain slow to confirm (last status: ${w.status}); reading state directly`;
+  return `confirmed as ${w.status}`;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("register");
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{
-    type: "success" | "error" | "info";
-    msg: string;
-  } | null>(null);
+  const [loadingStep, setLoadingStep] = useState<string>("");
+  const [status, setStatus] = useState<StatusMsg | null>(null);
 
   // Register form
   const [regUrl, setRegUrl] = useState("");
@@ -118,17 +149,33 @@ export default function Home() {
     setLoading(true);
     setStatus(null);
     setRegisteredId(null);
+    setLoadingStep("Submitting registration…");
     try {
-      const { receipt } = await writeContract("register_work", [
+      const counterBeforeRaw = await readContract("get_work_counter", []);
+      const counterBefore = Number(counterBeforeRaw);
+
+      setLoadingStep("Waiting for consensus (Accepted)…");
+      const { hash, wait } = await writeContract("register_work", [
         regUrl,
         regDesc,
         parseInt(regPrice),
         parseInt(regPenalty),
       ]);
-      const result =
-        (receipt as unknown as { result: string })?.result || "work_0";
-      setRegisteredId(result);
-      setStatus({ type: "success", msg: `Work registered: ${result}` });
+
+      setLoadingStep("Reading on-chain state…");
+      const counterAfterRaw = await readWithRetry(
+        () => readContract("get_work_counter", []),
+        (v) => Number(v) > counterBefore
+      );
+      const counterAfter = Number(counterAfterRaw);
+      const newId = `work_${counterAfter - 1}`;
+
+      setRegisteredId(newId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Work registered: ${newId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
     } catch (err: unknown) {
       setStatus({
         type: "error",
@@ -136,6 +183,7 @@ export default function Home() {
       });
     } finally {
       setLoading(false);
+      setLoadingStep("");
     }
   }
 
@@ -143,13 +191,20 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     setStatus(null);
+    setLoadingStep("Submitting license purchase…");
     try {
-      await writeContract(
+      const workId = normaliseWorkId(licWorkId);
+      setLoadingStep("Waiting for consensus (Accepted)…");
+      const { hash, wait } = await writeContract(
         "purchase_license",
-        [licWorkId],
+        [workId],
         BigInt(licValue || "0")
       );
-      setStatus({ type: "success", msg: "License purchased successfully!" });
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `License purchased for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
     } catch (err: unknown) {
       setStatus({
         type: "error",
@@ -157,6 +212,7 @@ export default function Home() {
       });
     } finally {
       setLoading(false);
+      setLoadingStep("");
     }
   }
 
@@ -165,24 +221,42 @@ export default function Home() {
     setLoading(true);
     setStatus(null);
     setVerdictResult(null);
+    setLoadingStep("Submitting scan…");
     try {
-      const { receipt } = await writeContract("scan_for_infringement", [
-        scanWorkId,
+      const workId = normaliseWorkId(scanWorkId);
+      setLoadingStep("Fetching page + AI consensus (this can take a minute)…");
+      const { hash, wait } = await writeContract("scan_for_infringement", [
+        workId,
         scanUrl,
       ]);
-      const raw =
-        (receipt as unknown as { result: string })?.result || "{}";
+
+      setLoadingStep("Reading verdict from chain…");
+      const verdictRaw = await readWithRetry<unknown>(
+        () => readContract("get_last_verdict_by_url", [workId, scanUrl]),
+        (v) => {
+          try {
+            const s = typeof v === "string" ? v : JSON.stringify(v);
+            return s.includes('"verdict"') && !s.includes('"error"');
+          } catch {
+            return false;
+          }
+        }
+      );
       const parsed: Verdict =
-        typeof raw === "string" ? JSON.parse(raw) : (raw as Verdict);
+        typeof verdictRaw === "string"
+          ? JSON.parse(verdictRaw)
+          : (verdictRaw as Verdict);
       setVerdictResult(parsed);
       setStatus({
-        type:
-          parsed.verdict === "INFRINGEMENT"
+        type: wait.timedOut
+          ? "warn"
+          : parsed.verdict === "INFRINGEMENT"
             ? "error"
             : parsed.verdict === "CLEAR"
               ? "success"
               : "info",
-        msg: `Scan complete: ${parsed.verdict} (${parsed.similarity}% similarity)`,
+        msg: `Scan ${wait.timedOut ? "submitted" : "complete"}: ${parsed.verdict} (${parsed.similarity}% similarity) — ${describeWait(wait)}`,
+        txHash: hash,
       });
     } catch (err: unknown) {
       setStatus({
@@ -191,6 +265,7 @@ export default function Home() {
       });
     } finally {
       setLoading(false);
+      setLoadingStep("");
     }
   }
 
@@ -226,7 +301,7 @@ export default function Home() {
     setStatus(null);
     setWorkInfo(null);
     try {
-      const result = await readContract("get_work", [viewWorkId]);
+      const result = await readContract("get_work", [normaliseWorkId(viewWorkId)]);
       const parsed: WorkInfo =
         typeof result === "string"
           ? JSON.parse(result)
@@ -305,18 +380,32 @@ export default function Home() {
           ))}
         </div>
 
+        {/* Loading step banner */}
+        {loading && loadingStep && (
+          <div className="mb-3 px-4 py-2 rounded-lg border text-xs bg-blue-500/10 border-blue-500/30 text-blue-300 flex items-center gap-2">
+            <span className="w-3 h-3 border-2 border-blue-300/40 border-t-blue-300 rounded-full animate-spin" />
+            {loadingStep}
+          </div>
+        )}
+
         {/* Status */}
         {status && (
           <div
-            className={`mb-6 px-4 py-3 rounded-lg border text-sm ${
-              status.type === "success"
-                ? "bg-green-500/10 border-green-500/30 text-green-400"
-                : status.type === "error"
-                  ? "bg-red-500/10 border-red-500/30 text-red-400"
-                  : "bg-blue-500/10 border-blue-500/30 text-blue-400"
-            }`}
+            className={`mb-6 px-4 py-3 rounded-lg border text-sm ${statusClasses(status.type)}`}
           >
-            {status.msg}
+            <div>{status.msg}</div>
+            {status.txHash && (
+              <div className="mt-1 text-xs">
+                <a
+                  href={txExplorerUrl(status.txHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline break-all opacity-80 hover:opacity-100"
+                >
+                  {status.txHash}
+                </a>
+              </div>
+            )}
           </div>
         )}
 

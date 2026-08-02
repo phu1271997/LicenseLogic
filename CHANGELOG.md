@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## 2026-08-02 — Third Resubmission (frontend polling fix)
+
+### Reviewer Feedback Addressed
+
+> "Add robust polling of data from the contract to avoid this error
+> `Registration failed: Timed out waiting for transaction ... to reach status
+> "FINALIZED" (current status: 5)`. Every request I made had this error in the
+> frontend but the contract executed the request."
+
+Root cause: `writeContract` was hardcoded to wait for `FINALIZED`. Studionet
+consensus reaches `ACCEPTED` (status 5) in seconds — chain state is applied and
+readable at that point — but `FINALIZED` only lands after the finality window
+closes, which can take many minutes. The old client gave up before then and
+reported a fake failure even though the tx had already succeeded.
+
+### Frontend Fixes
+
+1. `frontend/src/lib/genlayer.ts`
+   - New `waitForTx(hash, opts)` helper. Tier 1 uses
+     `client.waitForTransactionReceipt` with `status: ACCEPTED` and a 5-minute
+     ceiling (100 retries × 3s). Tier 2 falls back to manual polling of
+     `client.getTransaction` and accepts any decided state
+     (`ACCEPTED / FINALIZED / UNDETERMINED / CANCELED / *_TIMEOUT`).
+   - `writeContract` now returns `{ hash, wait }` so callers can distinguish
+     a hard failure from a slow-confirmation warning.
+   - New `readWithRetry(fn, predicate, opts)` that polls a view until it
+     reflects the expected state — covers the case where the write wait timed
+     out but the state has since propagated.
+   - New `txExplorerUrl(hash)` for surfacing the tx link in the UI.
+
+2. `frontend/src/app/page.tsx`
+   - Every write path (`register_work`, `purchase_license`,
+     `scan_for_infringement`) now:
+     - shows an intermediate loading step ("Submitting…", "Waiting for
+       consensus (Accepted)…", "Reading on-chain state…"),
+     - verifies success via a `readWithRetry` on the corresponding view
+       (`get_work_counter`, `get_last_verdict_by_url`),
+     - shows a yellow "warn" banner (not a red error) when the wait timed out
+       but the state confirms the tx landed,
+     - renders the tx hash with a link to the explorer regardless of outcome.
+   - `register_work` derives the new `work_id` from the counter delta instead
+     of the receipt, so it works even if the receipt was slow to arrive.
+
+### Contract
+
+- No contract changes. The bug was purely in the frontend polling strategy;
+  the deployed studionet contract at
+  `0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7` is still current.
+
 ## 2026-07-15 — Second Resubmission (post-reviewer feedback)
 
 ### Contract Fixes Surfaced By Explorer Review
