@@ -1,5 +1,93 @@
 # CHANGELOG
 
+## 2026-08-13 — Fourth Resubmission (steward: bounty + anchor + lint)
+
+### Reviewer Feedback Addressed
+
+> "Please make bounty rewards idempotent for each evidence-bound scan and
+> remove or make the registered-URL shortcut non-payable. Also fetch and
+> anchor the original work, then add adversarial replay tests and resolve
+> the contract lint errors before resubmitting."
+
+### Contract Changes (redeploy required)
+
+1. **Idempotent bounty per (work_id, suspect_url).** New storage field
+   `scan_credited: TreeMap[str, bool]`. `scan_for_infringement` now gates
+   both `infringement_count` increment and bounty payout on
+   `not scan_credited[verdict_key]`, then sets the flag after the first
+   INFRINGEMENT verdict. Replayed scans of the same URL still return the
+   verdict record but never re-pay bounty or double-count infringements.
+   Verdict JSON now carries `already_credited` and `registered_url_shortcut`
+   flags so clients can distinguish fresh detections from replays.
+
+2. **Registered-URL shortcut is non-payable.** When
+   `clean_suspect_url == original_url` the shortcut still records a
+   verdict (evidence trail), but the payout branch is now guarded by
+   `if not is_registered_url_shortcut` — owners cannot drain their own
+   bounty pool by scanning their canonical URL.
+
+3. **Fetch and anchor the original work.** New method `anchor_work(work_id)`:
+   owner-only, runs a nondet fetch (`gl.nondet.web.render`) + LLM summary
+   (`gl.nondet.exec_prompt`) inside `gl.eq_principle.prompt_comparative`
+   with a dedicated `ANCHOR_PRINCIPLE` — validators must agree that both
+   sides fetched the SAME page (same title/author/topic, differences in
+   phrasing OK). Result stored in `work_content_anchor: TreeMap[str, str]`.
+   Reverts if consensus reports `anchored=false`. Idempotent — a
+   successfully anchored work cannot be re-anchored. New views
+   `get_anchor(work_id)` and `is_scan_credited(work_id, suspect_url)`;
+   `get_work` and `list_works` now expose an `anchored` flag.
+
+4. **Lint clean.** `ruff check` returns zero findings:
+   - Import block reordered (stdlib before `from genlayer import *`).
+   - All 4 blind `except Exception` sites either narrowed to
+     `(ValueError, TypeError)` (URL parsing, `Address(...)`) or annotated
+     `# noqa: BLE001` at the two nondet call sites where GenVM legitimately
+     raises anything.
+   - F-string uses `!s` conversion flag instead of `str(...)`.
+   - `normalise_verdict` dropped the unused `Optional[int]` sentinel.
+
+### New Tests (`tests/test_adversarial_replay.py`, `tests/test_anchor.py`)
+
+Replay tests:
+- Replay same URL 3× → bounty paid once, counter increments once,
+  `already_credited=true` on 2nd+3rd.
+- Registered-URL shortcut → verdict recorded, bounty pool untouched, no
+  self-credit to owner.
+- Registered-URL shortcut × 3 → counter still 1, pool untouched.
+- Same URL across two different works → each work counted independently
+  (still 1-per-(work,url)).
+- CLEAR verdict → no credit → later INFRINGEMENT on a different URL
+  still pays normally.
+- Fetch-failed scan → forced UNCERTAIN, no credit.
+
+Anchor tests:
+- New work reports `anchored=false` by default.
+- Owner successfully anchors → summary persisted, `get_work` shows it.
+- Non-owner cannot anchor (reverts).
+- Already-anchored work cannot be re-anchored (reverts).
+- Anchor fetch failure reverts.
+- Missing work reverts.
+
+Full suite: **52 passed, 1 skipped** (was 40 passed, 1 skipped).
+
+### Frontend
+
+- `Verdict` type gains `already_credited` and `registered_url_shortcut`;
+  scan tab surfaces "Replay — bounty already claimed" and "Self-scan of
+  registered URL — no bounty paid" chips when relevant.
+- `WorkInfo` / `WorkSummary` types gain `anchored` + `anchor_summary`.
+- New "Anchor Work" button in the View tab: owner-only, calls
+  `anchor_work(work_id)` and shows the resulting summary.
+- Browse tab shows an anchor badge per work.
+
+### Deployment
+
+- **Contract must be redeployed** — new storage fields (`scan_credited`,
+  `work_content_anchor`). Old address `0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7`
+  is superseded. New address to be filled in
+  `deployment/deployed_addresses.json` and
+  `frontend/src/lib/genlayer.ts` FALLBACK_ADDRESS after redeploy.
+
 ## 2026-08-02 — Third Resubmission (frontend polling fix)
 
 ### Reviewer Feedback Addressed

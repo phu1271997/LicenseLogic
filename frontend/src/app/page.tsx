@@ -21,6 +21,9 @@ interface WorkInfo {
   license_price: number;
   penalty_amount: number;
   infringement_count: number;
+  bounty_pool?: number;
+  anchored?: boolean;
+  anchor_summary?: string;
 }
 
 interface Verdict {
@@ -29,6 +32,9 @@ interface Verdict {
   reasoning: string;
   matched_elements: string;
   suspect_url: string;
+  already_credited?: boolean;
+  registered_url_shortcut?: boolean;
+  fetch_failed?: boolean;
 }
 
 interface WorkSummary {
@@ -39,6 +45,7 @@ interface WorkSummary {
   penalty_amount: number;
   infringement_count: number;
   bounty_pool: number;
+  anchored?: boolean;
 }
 
 type Tab = "register" | "license" | "scan" | "view" | "browse";
@@ -292,6 +299,46 @@ export default function Home() {
       });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleAnchor(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Anchoring: fetch + LLM consensus (this can take a minute)…");
+    try {
+      const { hash, wait } = await writeContract("anchor_work", [workId]);
+      setLoadingStep("Reading anchor…");
+      const refreshed = await readWithRetry<unknown>(
+        () => readContract("get_work", [workId]),
+        (v) => {
+          try {
+            const parsed =
+              typeof v === "string" ? JSON.parse(v) : (v as WorkInfo);
+            return Boolean(parsed?.anchored);
+          } catch {
+            return false;
+          }
+        }
+      );
+      const parsed: WorkInfo =
+        typeof refreshed === "string"
+          ? JSON.parse(refreshed)
+          : (refreshed as WorkInfo);
+      setWorkInfo(parsed);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Work anchored (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Anchor failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
     }
   }
 
@@ -609,6 +656,27 @@ export default function Home() {
                     {verdictResult.matched_elements}
                   </p>
                 </div>
+                {(verdictResult.already_credited ||
+                  verdictResult.registered_url_shortcut ||
+                  verdictResult.fetch_failed) && (
+                  <div className="flex flex-wrap gap-2">
+                    {verdictResult.already_credited && (
+                      <span className="inline-block px-2 py-1 rounded-full text-xs bg-yellow-500/10 border border-yellow-500/30 text-yellow-300">
+                        Replay — bounty already claimed
+                      </span>
+                    )}
+                    {verdictResult.registered_url_shortcut && (
+                      <span className="inline-block px-2 py-1 rounded-full text-xs bg-blue-500/10 border border-blue-500/30 text-blue-300">
+                        Self-scan of registered URL — no bounty paid
+                      </span>
+                    )}
+                    {verdictResult.fetch_failed && (
+                      <span className="inline-block px-2 py-1 rounded-full text-xs bg-orange-500/10 border border-orange-500/30 text-orange-300">
+                        Fetch failed — forced UNCERTAIN
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="pt-2 border-t border-card-border">
                   <p className="text-xs text-muted break-all">
                     Scanned: {verdictResult.suspect_url}
@@ -687,6 +755,42 @@ export default function Home() {
                   <p className="text-xs text-muted mb-1">Description</p>
                   <p className="text-sm">{workInfo.work_desc}</p>
                 </div>
+                <div className="p-3 bg-black/30 rounded-xl border border-card-border space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted">
+                      Content Anchor{" "}
+                      <span
+                        className={`ml-2 px-2 py-0.5 rounded-full text-[10px] border ${
+                          workInfo.anchored
+                            ? "bg-green-500/10 border-green-500/30 text-green-400"
+                            : "bg-gray-500/10 border-gray-500/30 text-gray-400"
+                        }`}
+                      >
+                        {workInfo.anchored ? "anchored" : "not anchored"}
+                      </span>
+                    </p>
+                    {!workInfo.anchored && (
+                      <button
+                        type="button"
+                        onClick={() => handleAnchor(workInfo.work_id)}
+                        disabled={loading}
+                        className="px-3 py-1 text-xs bg-accent hover:bg-accent-hover disabled:opacity-50 text-white rounded-lg font-semibold transition-colors"
+                      >
+                        {loading ? "Anchoring…" : "Anchor Work"}
+                      </button>
+                    )}
+                  </div>
+                  {workInfo.anchored && workInfo.anchor_summary && (
+                    <p className="text-sm">{workInfo.anchor_summary}</p>
+                  )}
+                  {!workInfo.anchored && (
+                    <p className="text-xs text-muted">
+                      Owner-only. Fetches the reference URL and stores an
+                      LLM-consensus summary of the page as immutable
+                      provenance on-chain.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -725,15 +829,26 @@ export default function Home() {
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono text-sm font-bold">{w.work_id}</span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full border ${
-                          w.infringement_count > 0
-                            ? "bg-red-500/10 border-red-500/30 text-red-400"
-                            : "bg-green-500/10 border-green-500/30 text-green-400"
-                        }`}
-                      >
-                        {w.infringement_count} infringement(s)
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                            w.anchored
+                              ? "bg-green-500/10 border-green-500/30 text-green-400"
+                              : "bg-gray-500/10 border-gray-500/30 text-gray-400"
+                          }`}
+                        >
+                          {w.anchored ? "anchored" : "unanchored"}
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full border ${
+                            w.infringement_count > 0
+                              ? "bg-red-500/10 border-red-500/30 text-red-400"
+                              : "bg-green-500/10 border-green-500/30 text-green-400"
+                          }`}
+                        >
+                          {w.infringement_count} infringement(s)
+                        </span>
+                      </div>
                     </div>
                     <a
                       href={w.work_url}

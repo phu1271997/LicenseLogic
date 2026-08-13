@@ -1,15 +1,18 @@
 # v0.2.16
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
-from genlayer import *
 import hashlib
 import json
 import re
 from urllib.parse import urlparse
 
+from genlayer import *
 
 ZERO_ADDR = Address("0x0000000000000000000000000000000000000000")
 U256_MAX = (1 << 256) - 1
 VALID_VERDICTS = {"INFRINGEMENT", "CLEAR", "UNCERTAIN"}
+ANCHOR_MAX_TEXT = 6000
+ANCHOR_SUMMARY_MAX = 800
+
 CONSENSUS_PRINCIPLE = (
     "Both leader and validator return a JSON string with fields "
     "{verdict, similarity, reasoning, matched_elements, fetch_failed, injection_attempt}. "
@@ -26,8 +29,16 @@ CONSENSUS_PRINCIPLE = (
     "(5) reasoning and matched_elements may differ in wording without breaking equivalence."
 )
 
+ANCHOR_PRINCIPLE = (
+    "Both sides return a JSON string with fields {anchored: bool, summary: str, reason: str}. "
+    "The `anchored` booleans MUST match. When anchored=true, the two summaries must describe "
+    "the SAME web page (same title/topic/author when present, same 1-2 distinctive claims); "
+    "differences in phrasing are acceptable. When anchored=false, both sides must agree that "
+    "the fetch or LLM step failed. Do not accept a mismatch on `anchored`."
+)
 
-def clean_llm_json(text: str) -> dict:
+
+def clean_llm_json(text) -> dict:
     if isinstance(text, dict):
         return text
     s = str(text)
@@ -59,7 +70,7 @@ def parse_score(data: dict) -> int:
     return 50
 
 
-def normalise_verdict(raw: str, similarity: int | None = None) -> str:
+def normalise_verdict(raw: str, similarity: int) -> str:
     verdict = str(raw).strip().upper()
     if verdict not in VALID_VERDICTS:
         if "INFRING" in verdict:
@@ -69,8 +80,6 @@ def normalise_verdict(raw: str, similarity: int | None = None) -> str:
         else:
             verdict = "UNCERTAIN"
 
-    if similarity is None:
-        return verdict
     if similarity >= 70:
         return "INFRINGEMENT"
     if similarity < 40:
@@ -118,12 +127,22 @@ Output ONLY a JSON object:
 }}"""
 
 
+def build_anchor_prompt(page_text: str) -> str:
+    return f"""Summarize the following web page in 2-3 factual sentences.
+Focus on the content's identity: title (if any), author (if any), topic, and
+1-2 distinctive claims or phrasings. Do NOT include marketing fluff, ads,
+timestamps, or navigation text. Output plain text only, no JSON, no markdown.
+
+PAGE TEXT:
+{page_text}"""
+
+
 def is_valid_url(value: str) -> bool:
     if not value:
         return False
     try:
         parsed = urlparse(value)
-    except Exception:
+    except (ValueError, TypeError):
         return False
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
@@ -158,6 +177,8 @@ class Contract(gl.Contract):
     registration_warning: TreeMap[str, str]
     withdrawable_balance: TreeMap[str, u256]
     infringement_bounty: TreeMap[str, u256]
+    work_content_anchor: TreeMap[str, str]
+    scan_credited: TreeMap[str, bool]
 
     admin: Address
     work_counter: u256
@@ -175,7 +196,7 @@ class Contract(gl.Contract):
         return owner
 
     def _license_key(self, work_id: str, addr: Address) -> str:
-        return f"{work_id}:{str(addr)}"
+        return f"{work_id}:{addr!s}"
 
     def _credit_address(self, addr: Address, amount: u256) -> None:
         key = str(addr)
@@ -212,8 +233,103 @@ class Contract(gl.Contract):
             if int(penalty_amount) == 0
             else ""
         )
+        self.work_content_anchor[work_id] = json.dumps(
+            {"anchored": False, "reason": "pending: call anchor_work(work_id) to fetch"},
+            sort_keys=True,
+        )
         self.work_counter = checked_add(self.work_counter, 1)
         return work_id
+
+    @gl.public.write
+    def anchor_work(self, work_id: str) -> str:
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can anchor")
+
+        current_anchor = self.work_content_anchor.get(work_id, "")
+        if current_anchor:
+            try:
+                parsed = json.loads(current_anchor)
+                if bool(parsed.get("anchored")):
+                    raise gl.vm.UserError("Work already anchored")
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+        clean_url = self.work_url.get(work_id, "")
+        if not is_valid_url(clean_url):
+            raise gl.vm.UserError("Cannot anchor: stored work_url is invalid")
+
+        def fetch_and_summarize() -> str:
+            try:
+                page_html = gl.nondet.web.render(clean_url, mode="text")
+            except Exception as exc:  # noqa: BLE001
+                return json.dumps(
+                    {
+                        "anchored": False,
+                        "summary": "",
+                        "reason": f"fetch failed: {str(exc)[:200]}",
+                    },
+                    sort_keys=True,
+                )
+
+            text = re.sub(r"<[^>]+>", " ", str(page_html))
+            text = re.sub(r"\s+", " ", text).strip()[:ANCHOR_MAX_TEXT]
+
+            if not text:
+                return json.dumps(
+                    {"anchored": False, "summary": "", "reason": "empty page body"},
+                    sort_keys=True,
+                )
+
+            try:
+                summary = gl.nondet.exec_prompt(build_anchor_prompt(text))
+            except Exception as exc:  # noqa: BLE001
+                return json.dumps(
+                    {
+                        "anchored": False,
+                        "summary": "",
+                        "reason": f"llm failed: {str(exc)[:200]}",
+                    },
+                    sort_keys=True,
+                )
+
+            summary_str = str(summary).strip()[:ANCHOR_SUMMARY_MAX]
+            if not summary_str:
+                return json.dumps(
+                    {"anchored": False, "summary": "", "reason": "empty summary"},
+                    sort_keys=True,
+                )
+
+            return json.dumps(
+                {"anchored": True, "summary": summary_str, "reason": ""},
+                sort_keys=True,
+            )
+
+        anchor_json = gl.eq_principle.prompt_comparative(
+            fetch_and_summarize,
+            principle=ANCHOR_PRINCIPLE,
+        )
+
+        try:
+            parsed = json.loads(anchor_json) if isinstance(anchor_json, str) else anchor_json
+        except (json.JSONDecodeError, TypeError):
+            raise gl.vm.UserError("Anchor consensus returned unparseable payload")
+
+        if not bool(parsed.get("anchored")):
+            raise gl.vm.UserError(
+                f"Anchor failed: {str(parsed.get('reason', 'unknown'))[:200]}"
+            )
+
+        record = json.dumps(
+            {
+                "anchored": True,
+                "summary": str(parsed.get("summary", ""))[:ANCHOR_SUMMARY_MAX],
+                "anchored_url": clean_url,
+            },
+            sort_keys=True,
+        )
+        self.work_content_anchor[work_id] = record
+        return record
 
     @gl.public.write.payable
     def purchase_license(self, work_id: str) -> str:
@@ -265,8 +381,10 @@ class Contract(gl.Contract):
         if not original_desc:
             raise gl.vm.UserError(f"Work {work_id} description missing")
 
+        is_registered_url_shortcut = clean_suspect_url == original_url
+
         def evaluate_scan() -> str:
-            if clean_suspect_url == original_url:
+            if is_registered_url_shortcut:
                 payload = {
                     "verdict": "INFRINGEMENT",
                     "similarity": 100,
@@ -279,7 +397,7 @@ class Contract(gl.Contract):
 
             try:
                 page_html = gl.nondet.web.render(clean_suspect_url, mode="html")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 payload = {
                     "verdict": "UNCERTAIN",
                     "similarity": 50,
@@ -296,7 +414,7 @@ class Contract(gl.Contract):
 
             try:
                 raw = gl.nondet.exec_prompt(prompt, response_format="json")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 payload = {
                     "verdict": "UNCERTAIN",
                     "similarity": 50,
@@ -374,6 +492,7 @@ class Contract(gl.Contract):
 
         suspect_hash = deterministic_hash(clean_suspect_url)
         verdict_key = f"{work_id}:{suspect_hash}"
+        already_credited = self.scan_credited.get(verdict_key, False)
 
         verdict_record = json.dumps(
             {
@@ -384,21 +503,30 @@ class Contract(gl.Contract):
                 "suspect_url": clean_suspect_url,
                 "fetch_failed": fetch_failed,
                 "injection_attempt": injection_attempt,
+                "already_credited": already_credited,
+                "registered_url_shortcut": is_registered_url_shortcut,
             },
             sort_keys=True,
         )
         self.last_verdict[verdict_key] = verdict_record
 
-        if verdict_str == "INFRINGEMENT" and not fetch_failed:
+        if (
+            verdict_str == "INFRINGEMENT"
+            and not fetch_failed
+            and not already_credited
+        ):
             current = self.infringement_count.get(work_id, u256(0))
             self.infringement_count[work_id] = checked_add(current, 1)
 
-            bounty_pool = self.infringement_bounty.get(work_id, u256(0))
-            if int(bounty_pool) > 0:
-                payout = max(1, int(bounty_pool) // 10)
-                payout = min(payout, int(bounty_pool))
-                self.infringement_bounty[work_id] = checked_sub(bounty_pool, payout)
-                self._credit_address(gl.message.sender_address, u256(payout))
+            if not is_registered_url_shortcut:
+                bounty_pool = self.infringement_bounty.get(work_id, u256(0))
+                if int(bounty_pool) > 0:
+                    payout = max(1, int(bounty_pool) // 10)
+                    payout = min(payout, int(bounty_pool))
+                    self.infringement_bounty[work_id] = checked_sub(bounty_pool, payout)
+                    self._credit_address(gl.message.sender_address, u256(payout))
+
+            self.scan_credited[verdict_key] = True
 
         return verdict_record
 
@@ -421,7 +549,7 @@ class Contract(gl.Contract):
     def has_license(self, work_id: str, addr: str) -> bool:
         try:
             address = Address(addr)
-        except Exception:
+        except (ValueError, TypeError):
             raise gl.vm.UserError("Invalid address")
         return self.licensees.get(self._license_key(work_id, address), ZERO_ADDR) != ZERO_ADDR
 
@@ -429,7 +557,7 @@ class Contract(gl.Contract):
     def get_withdrawable(self, addr: str) -> u256:
         try:
             address = Address(addr)
-        except Exception:
+        except (ValueError, TypeError):
             raise gl.vm.UserError("Invalid address")
         return self.withdrawable_balance.get(str(address), u256(0))
 
@@ -451,6 +579,17 @@ class Contract(gl.Contract):
         if owner == ZERO_ADDR:
             return json.dumps({"error": f"Work {work_id} not found"})
 
+        anchor_raw = self.work_content_anchor.get(work_id, "")
+        anchored = False
+        anchor_summary = ""
+        if anchor_raw:
+            try:
+                anchor_parsed = json.loads(anchor_raw)
+                anchored = bool(anchor_parsed.get("anchored", False))
+                anchor_summary = str(anchor_parsed.get("summary", ""))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         return json.dumps(
             {
                 "work_id": work_id,
@@ -462,6 +601,8 @@ class Contract(gl.Contract):
                 "infringement_count": int(self.infringement_count.get(work_id, u256(0))),
                 "registration_warning": self.registration_warning.get(work_id, ""),
                 "bounty_pool": int(self.infringement_bounty.get(work_id, u256(0))),
+                "anchored": anchored,
+                "anchor_summary": anchor_summary,
             },
             sort_keys=True,
         )
@@ -484,6 +625,19 @@ class Contract(gl.Contract):
         return self.get_last_verdict(work_id, deterministic_hash(clean))
 
     @gl.public.view
+    def is_scan_credited(self, work_id: str, suspect_url: str) -> bool:
+        clean = normalise_url(suspect_url)
+        key = f"{work_id}:{deterministic_hash(clean)}"
+        return self.scan_credited.get(key, False)
+
+    @gl.public.view
+    def get_anchor(self, work_id: str) -> str:
+        return self.work_content_anchor.get(
+            work_id,
+            json.dumps({"anchored": False, "reason": "no anchor record"}, sort_keys=True),
+        )
+
+    @gl.public.view
     def list_works(self) -> str:
         works = []
         for index in range(int(self.work_counter)):
@@ -491,6 +645,15 @@ class Contract(gl.Contract):
             owner = self.owners.get(work_id, ZERO_ADDR)
             if owner == ZERO_ADDR:
                 continue
+
+            anchor_raw = self.work_content_anchor.get(work_id, "")
+            anchored = False
+            if anchor_raw:
+                try:
+                    anchored = bool(json.loads(anchor_raw).get("anchored", False))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             works.append(
                 {
                     "work_id": work_id,
@@ -500,6 +663,7 @@ class Contract(gl.Contract):
                     "penalty_amount": int(self.penalty_amount.get(work_id, u256(0))),
                     "infringement_count": int(self.infringement_count.get(work_id, u256(0))),
                     "bounty_pool": int(self.infringement_bounty.get(work_id, u256(0))),
+                    "anchored": anchored,
                 }
             )
         return json.dumps({"count": len(works), "works": works}, sort_keys=True)

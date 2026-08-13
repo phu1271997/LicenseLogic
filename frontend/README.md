@@ -16,7 +16,7 @@ Open http://localhost:3000.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `NEXT_PUBLIC_CONTRACT_ADDRESS` | Deployed LicenseLogic contract address | `0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7` |
+| `NEXT_PUBLIC_CONTRACT_ADDRESS` | Deployed LicenseLogic contract address | `0x8372967d074C066EC2006782171d39E18eB5a46f` |
 | `NEXT_PUBLIC_NETWORK_LABEL` | Label shown in header | `Studionet` |
 | `NEXT_PUBLIC_EXPLORER_BASE` | Explorer link prefix | `https://studio.genlayer.com/contracts` |
 

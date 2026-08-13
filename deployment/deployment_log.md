@@ -1,5 +1,40 @@
 # Deployment Log
 
+## 2026-08-13 Fourth Resubmission Deployment (steward feedback)
+
+- Network: `studionet`
+- Contract address: `0x8372967d074C066EC2006782171d39E18eB5a46f`
+- Deployment tx hash: `PENDING_FILL`
+- Deployer wallet: `PENDING_FILL`
+- Contract file: `contracts/license_logic.py`
+- Status: deployed by operator on 2026-08-13; frontend fallback + Vercel updated
+- Live frontend URL: https://license-logic.vercel.app
+
+Steward feedback addressed:
+
+1. **Idempotent bounty per (work_id, suspect_url).** New `scan_credited` TreeMap;
+   `scan_for_infringement` gates counter increment + bounty payout on
+   `not scan_credited[key]`. Replay never re-pays.
+2. **Registered-URL shortcut is non-payable.** Shortcut still records the
+   verdict (evidence trail) but the payout branch is guarded by
+   `if not is_registered_url_shortcut` — owners cannot drain their own pool.
+3. **Fetch + anchor the original work.** New owner-only `anchor_work(work_id)`
+   method runs `gl.nondet.web.render` + `gl.nondet.exec_prompt` inside
+   `gl.eq_principle.prompt_comparative` with a dedicated `ANCHOR_PRINCIPLE`.
+   Stores summary in `work_content_anchor` TreeMap.
+4. **Adversarial replay tests.** New `tests/test_adversarial_replay.py` and
+   `tests/test_anchor.py` — 52 passed, 1 skipped (was 40/1).
+5. **Ruff-clean.** All 7 previous lint findings resolved. `ruff check` passes.
+
+Verification checklist:
+
+- [ ] Scan same suspect URL 3× → bounty paid once, counter=1, `already_credited=true` on replays
+- [ ] `scan_for_infringement(work, registered_url)` → verdict INFRINGEMENT, bounty pool unchanged
+- [ ] `anchor_work(work)` → returns anchor JSON with `anchored=true`, `get_work` reflects it
+- [ ] `anchor_work(work)` twice → 2nd call reverts "already anchored"
+- [ ] Non-owner anchor call reverts
+- [ ] `is_scan_credited(work, url)` returns true after credited INFRINGEMENT
+
 ## 2026-07-15 Third Resubmission Deployment
 
 - Network: `studionet`

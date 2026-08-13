@@ -8,7 +8,7 @@ The project lets creators register original works, sell usage licenses, and scan
 
 - Contract compiled and tested against GenVM v0.2.16 (`40 passed, 1 skipped`)
 - Reviewer-flagged runtime bugs fixed (see [CHANGELOG.md](CHANGELOG.md))
-- New Studionet deployment (2026-07-15): [`0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7`](https://studio.genlayer.com/contracts/0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7)
+- New Studionet deployment (2026-07-15): [`0x8372967d074C066EC2006782171d39E18eB5a46f`](https://studio.genlayer.com/contracts/0x8372967d074C066EC2006782171d39E18eB5a46f)
 - Live frontend: [https://license-logic.vercel.app](https://license-logic.vercel.app)
 
 ## Reviewer Feedback Addressed (2026-07-15 resubmission)
