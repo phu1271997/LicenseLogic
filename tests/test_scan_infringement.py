@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from .conftest import verdict_json
 
 
-def test_scan_happy_path_infringement_updates_storage(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_scan_happy_path_infringement_updates_storage(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.mock_web("example.com/suspect", {"status": 200, "body": "<html>copied text</html>"})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",
@@ -22,8 +20,8 @@ def test_scan_happy_path_infringement_updates_storage(registered_work, direct_vm
     assert int(contract.get_infringement_count(work_id)) == 1
 
 
-def test_scan_happy_path_clear_does_not_increment_counter(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_scan_happy_path_clear_does_not_increment_counter(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.mock_web("example.com/clear", {"status": 200, "body": "<html>different text</html>"})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",
@@ -36,8 +34,8 @@ def test_scan_happy_path_clear_does_not_increment_counter(registered_work, direc
     assert int(contract.get_infringement_count(work_id)) == 0
 
 
-def test_scan_uncertain_does_not_increment_counter(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_scan_uncertain_does_not_increment_counter(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.mock_web("example.com/uncertain", {"status": 200, "body": "<html>mixed overlap</html>"})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",
@@ -55,8 +53,8 @@ def test_scan_rejects_missing_work(contract, direct_vm):
         contract.scan_for_infringement("work_404", "https://example.com/suspect")
 
 
-def test_scan_rejects_invalid_url(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_scan_rejects_invalid_url(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     with direct_vm.expect_revert("valid http(s) URL"):
         contract.scan_for_infringement(work_id, "notaurl")
 

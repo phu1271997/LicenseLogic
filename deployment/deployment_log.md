@@ -1,5 +1,45 @@
 # Deployment Log
 
+## 2026-08-16 Fifth Resubmission Deployment (steward: anchor-bound scan + canonical evidence)
+
+- Network: `studionet`
+- Contract address: `0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035`
+- Deployment tx hash: `PENDING_FILL`
+- Deployer wallet: `PENDING_FILL`
+- Contract file: `contracts/license_logic.py`
+- Status: deployed by operator on 2026-08-16; frontend fallback + Vercel updated
+- Live frontend URL: https://license-logic.vercel.app
+
+Steward feedback addressed:
+
+1. **Scans bound to anchored original.** `scan_for_infringement` reverts
+   with `"call anchor_work(work_id) first"` when the work has no anchored
+   snapshot; the analysis prompt includes the anchor summary as a
+   trusted second source alongside the owner description.
+2. **Canonical evidence identity.** New `canonical_url(url)` collapses
+   `http↔https`, host case, `www.`, default ports (:80, :443), trailing
+   slash, fragment, and tracking params (`utm_*`, `fbclid`, `gclid`,
+   `mc_*`, `ref`, `spm`, `share`, etc.). Every scan_credited key and
+   verdict lookup keys off the canonical hash.
+3. **Alias-replay tests.** `tests/test_alias_replay.py` (9 scenarios):
+   canonical view collapses 9 variants to 1; every non-baseline alias
+   returns `already_credited=true`; iterating all variants never
+   double-pays; registered-URL alias variants skip payout; scan reverts
+   before anchor; `get_last_verdict_by_url` / `is_scan_credited` are
+   canonical. Suite: 66 passed, 1 skipped.
+4. **Reproducible lint.** `ruff.toml` + pinned `ruff==0.16.2` in
+   `requirements-dev.txt`. Documented command:
+   `pip install -r requirements-dev.txt && ruff check contracts/ tests/`
+   → `All checks passed!`
+
+Verification checklist:
+
+- [ ] `scan_for_infringement(work, url)` before `anchor_work(work)` reverts
+- [ ] `anchor_work(work)` → subsequent scan succeeds
+- [ ] Scan `https://EXAMPLE.com/foo?utm_source=x` and `https://example.com/foo/` → same canonical, `already_credited=true` on 2nd
+- [ ] `get_canonical_url("http://www.example.com:443/Foo/?utm_source=x#top")` → `https://example.com/Foo`
+- [ ] Verdict record includes `canonical_url` field
+
 ## 2026-08-13 Fourth Resubmission Deployment (steward feedback)
 
 - Network: `studionet`

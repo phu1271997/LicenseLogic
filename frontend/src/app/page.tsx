@@ -32,6 +32,7 @@ interface Verdict {
   reasoning: string;
   matched_elements: string;
   suspect_url: string;
+  canonical_url?: string;
   already_credited?: boolean;
   registered_url_shortcut?: boolean;
   fetch_failed?: boolean;
@@ -266,9 +267,13 @@ export default function Home() {
         txHash: hash,
       });
     } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : String(err);
+      const hint = raw.includes("no anchored original")
+        ? " — open the View tab and click 'Anchor Work' first."
+        : "";
       setStatus({
         type: "error",
-        msg: `Scan failed: ${err instanceof Error ? err.message : String(err)}`,
+        msg: `Scan failed: ${raw}${hint}`,
       });
     } finally {
       setLoading(false);
@@ -677,10 +682,19 @@ export default function Home() {
                     )}
                   </div>
                 )}
-                <div className="pt-2 border-t border-card-border">
+                <div className="pt-2 border-t border-card-border space-y-1">
                   <p className="text-xs text-muted break-all">
                     Scanned: {verdictResult.suspect_url}
                   </p>
+                  {verdictResult.canonical_url &&
+                    verdictResult.canonical_url !== verdictResult.suspect_url && (
+                      <p className="text-xs text-muted break-all">
+                        Canonical evidence key:{" "}
+                        <span className="font-mono">
+                          {verdictResult.canonical_url}
+                        </span>
+                      </p>
+                    )}
                 </div>
               </div>
             )}

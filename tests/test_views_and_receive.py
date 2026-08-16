@@ -28,8 +28,8 @@ def test_list_works_reflects_registered_entries(contract, direct_vm, direct_acco
     assert payload["works"][0]["license_price"] == 100
 
 
-def test_get_last_verdict_by_url_matches_deterministic_hash(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_get_last_verdict_by_url_matches_deterministic_hash(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     suspect = "https://example.com/mirror"
     direct_vm.mock_web("example.com/mirror", {"status": 200, "body": "<html>mirror</html>"})
     direct_vm.mock_llm(
@@ -52,8 +52,8 @@ def test_receive_credits_sender_balance(contract, direct_vm, direct_alice):
     assert int(contract.get_withdrawable(str(direct_alice.hex() if hasattr(direct_alice, "hex") else direct_alice))) >= 0
 
 
-def test_scan_result_survives_json_round_trip(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_scan_result_survives_json_round_trip(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.mock_web("example.com/roundtrip", {"status": 200, "body": "<html>data</html>"})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",

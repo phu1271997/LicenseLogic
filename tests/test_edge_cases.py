@@ -32,8 +32,8 @@ def test_work_counter_overflow_rejects_gracefully(contract, direct_vm):
         contract.register_work(BASE_URL, BASE_DESC, 100, 25)
 
 
-def test_bounty_payout_cap_prevents_negative_pool(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_bounty_payout_cap_prevents_negative_pool(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.value = 3
     contract.deposit_infringement_bounty(work_id)
 

@@ -6,10 +6,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from .conftest import BASE_DESC, BASE_URL
-
 
 ANCHOR_SUMMARY_TEXT = (
     "The Original Work by A. Author. A short essay describing "

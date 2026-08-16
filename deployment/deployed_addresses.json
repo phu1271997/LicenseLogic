@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035",
+    "deployed_at": "2026-08-16T00:00:00+07:00",
+    "deployment_tx_hash": "PENDING_FILL",
+    "deployer_address": "PENDING_FILL",
+    "abi_hash": "PENDING_FILL",
+    "notes": "2026-08-16 fifth resubmission. Steward feedback: scans now anchor-bound (revert if unanchored), evidence identity canonicalized (http↔https, case, www., tracking params, trailing slash, fragment, default port), new get_canonical_url view, alias-replay tests, reproducible lint (ruff.toml + pinned ruff==0.16.2). See CHANGELOG.md."
+  },
+  "studionet_previous_v4": {
     "contract_address": "0x8372967d074C066EC2006782171d39E18eB5a46f",
     "deployed_at": "2026-08-13T00:00:00+07:00",
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "2026-08-13 fourth resubmission. Steward feedback: idempotent bounty per (work_id, suspect_url), non-payable registered-URL shortcut, new anchor_work(work_id) method, ruff-clean contract. New storage fields: scan_credited, work_content_anchor. See CHANGELOG.md."
+    "notes": "Superseded by the 2026-08-16 build above. Kept for historical reference."
   },
   "studionet_previous_v3": {
     "contract_address": "0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7",
@@ -13,7 +21,7 @@
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "Superseded by the 2026-08-13 build above. Kept for historical reference."
+    "notes": "Superseded. Kept for historical reference."
   },
   "studionet_previous_v2": {
     "contract_address": "0x70B0CBB3A9A199f01aD2E1382ECE1b99B989a5CF",

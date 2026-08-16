@@ -1,5 +1,88 @@
 # CHANGELOG
 
+## 2026-08-16 — Fifth Resubmission (steward: anchor-bound scan + canonical evidence + reproducible lint)
+
+### Reviewer Feedback Addressed
+
+> "Thanks for the update. The exact-key guard and non-payable registered-URL
+> shortcut address part of the request, but scans still ignore the fetched
+> original anchor and equivalent URL variants can receive fresh bounty
+> credits. Please bind scanning and payouts to a stable anchored original,
+> canonicalize the evidence identity, add alias-replay tests, and make the
+> documented lint check pass reproducibly."
+
+### Contract Changes (redeploy required)
+
+1. **Scans are bound to a stable anchored original.** New helper
+   `_load_anchor_summary(work_id)` reads
+   `work_content_anchor[work_id].summary` and returns it only when
+   `anchored=true`. `scan_for_infringement` reverts with
+   `"Work {work_id} has no anchored original — call anchor_work(work_id) first"`
+   when the work has never been anchored, so both counter increments and
+   bounty payouts are only possible against a validator-consensus snapshot
+   of the original. The LLM analysis prompt now includes the anchor summary
+   as a trusted second source, alongside the owner-supplied description.
+
+2. **Canonicalized evidence identity.** New `canonical_url(url)` helper:
+   - scheme lowercased; `http` collapsed to `https`,
+   - host lowercased, default ports (`:80`, `:443`) stripped, leading `www.`
+     removed,
+   - trailing slash trimmed (root `/` preserved),
+   - fragment dropped,
+   - tracking params (`utm_*`, `fbclid`, `gclid`, `mc_*`, `ref`, `spm`,
+     `share`, etc.) filtered, remaining params sorted.
+   All evidence keys are now `f"{work_id}:{sha256(canonical_url(url))}"`,
+   so `https://EXAMPLE.com/foo/`, `http://example.com/foo?utm_source=x`,
+   `https://www.example.com/foo#top`, and `https://example.com:443/foo`
+   collapse to a single slot. The registered-URL shortcut also compares
+   canonicals. Every verdict record now carries `canonical_url`, and views
+   `get_last_verdict_by_url`, `is_scan_credited`, and new
+   `get_canonical_url(suspect_url)` all canonicalize their input.
+
+3. **Additional lint cleanups.**
+   - `B904`: added `raise ... from exc` at the two `Address(...)` catch sites
+     and the anchor consensus JSON parse site.
+   - `PIE810`: merged `endswith(":80") or endswith(":443")` → `endswith((":80", ":443"))`.
+   - `FURB188`: replaced conditional slice with `str.removeprefix("www.")`.
+   - `SIM105`: replaced `try/except/pass` in `list_works` with
+     `contextlib.suppress`.
+
+### New / Updated Tests
+
+- **`tests/test_alias_replay.py` (9 scenarios)**: canonical view collapses
+  9 alias variants to 1; parametrized test verifies every non-baseline
+  alias slots into the baseline's key (`already_credited=true`, pool
+  unchanged); iterating all 9 variants never double-pays;
+  registered-URL alias variants also skip payout; scan reverts before
+  anchor; `get_last_verdict_by_url` and `is_scan_credited` are
+  canonicalized.
+- **`tests/conftest.py`**: new `anchored_work` fixture (registers +
+  anchors + clears mocks + restores sender/value) and `install_anchor_mocks`
+  helper. Every test that calls `scan_for_infringement` was migrated to
+  `anchored_work`.
+- **`tests/test_treasury_solvency.py`**: the randomized invariant test now
+  anchors each newly registered work so its subsequent scans are legal.
+- Suite: **66 passed, 1 skipped** (was 52/1).
+
+### Reproducible Lint
+
+- New `ruff.toml` at repo root: pinned `target-version = "py310"`, curated
+  ruleset (`E, F, I, B, BLE, PIE, RUF, UP, FURB, SIM`), narrow ignores
+  (`F403/F405` for the required `from genlayer import *`, `E501` for
+  intentionally long principle strings).
+- `requirements-dev.txt` pins `ruff==0.16.2` alongside `genlayer-test`.
+- README documents:
+  `pip install -r requirements-dev.txt && ruff check contracts/ tests/`
+- Local + CI now produce the same output: `All checks passed!`.
+
+### Deployment
+
+- **Contract must be redeployed** — scan behavior and evidence-key
+  derivation changed. Previous address
+  `0x8372967d074C066EC2006782171d39E18eB5a46f` is superseded. New address
+  to be filled in `deployment/deployed_addresses.json` and
+  `frontend/src/lib/genlayer.ts` `FALLBACK_ADDRESS` after redeploy.
+
 ## 2026-08-13 — Fourth Resubmission (steward: bounty + anchor + lint)
 
 ### Reviewer Feedback Addressed

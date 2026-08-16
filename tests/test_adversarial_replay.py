@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from .conftest import BASE_DESC, BASE_URL, addr_hex, verdict_json
+from .conftest import BASE_DESC, BASE_URL, addr_hex, install_anchor_mocks, verdict_json
 
 
 def _mock_infringement(direct_vm, url_no_scheme: str) -> None:
@@ -22,9 +22,9 @@ def _mock_infringement(direct_vm, url_no_scheme: str) -> None:
 
 
 def test_replay_same_url_pays_bounty_only_once(
-    registered_work, direct_vm, direct_owner, direct_bob
+    anchored_work, direct_vm, direct_owner, direct_bob
 ):
-    contract, work_id = registered_work
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_owner
     direct_vm.value = 100
@@ -74,9 +74,9 @@ def test_replay_same_url_pays_bounty_only_once(
 
 
 def test_registered_url_shortcut_records_verdict_but_pays_no_bounty(
-    registered_work, direct_vm, direct_owner
+    anchored_work, direct_vm, direct_owner
 ):
-    contract, work_id = registered_work
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_owner
     direct_vm.value = 500
@@ -98,9 +98,9 @@ def test_registered_url_shortcut_records_verdict_but_pays_no_bounty(
 
 
 def test_registered_url_shortcut_is_also_idempotent(
-    registered_work, direct_vm, direct_owner
+    anchored_work, direct_vm, direct_owner
 ):
-    contract, work_id = registered_work
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_owner
     direct_vm.value = 200
@@ -123,11 +123,17 @@ def test_replay_across_different_works_are_independent(
     work_a = contract.register_work(
         "https://example.com/work-a", BASE_DESC + " A", 10, 5
     )
+    install_anchor_mocks(direct_vm, "example.com/work-a")
+    contract.anchor_work(work_a)
+    direct_vm.clear_mocks()
 
     direct_vm.sender = direct_alice
     work_b = contract.register_work(
         "https://example.com/work-b", BASE_DESC + " B", 10, 5
     )
+    install_anchor_mocks(direct_vm, "example.com/work-b")
+    contract.anchor_work(work_b)
+    direct_vm.clear_mocks()
 
     direct_vm.sender = direct_owner
     direct_vm.value = 60
@@ -159,9 +165,9 @@ def test_replay_across_different_works_are_independent(
 
 
 def test_clear_verdict_does_not_credit_and_a_later_infringement_still_pays(
-    registered_work, direct_vm, direct_owner, direct_bob
+    anchored_work, direct_vm, direct_owner, direct_bob
 ):
-    contract, work_id = registered_work
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_owner
     direct_vm.value = 80
@@ -201,9 +207,9 @@ def test_clear_verdict_does_not_credit_and_a_later_infringement_still_pays(
 
 
 def test_fetch_failed_does_not_credit_bounty(
-    registered_work, direct_vm, direct_owner, direct_bob
+    anchored_work, direct_vm, direct_owner, direct_bob
 ):
-    contract, work_id = registered_work
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_owner
     direct_vm.value = 100

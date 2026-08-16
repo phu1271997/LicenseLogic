@@ -6,7 +6,7 @@ import {
   type TransactionHash,
 } from "genlayer-js/types";
 
-const FALLBACK_ADDRESS = "0x8372967d074C066EC2006782171d39E18eB5a46f";
+const FALLBACK_ADDRESS = "0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035";
 
 export const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ||
   FALLBACK_ADDRESS) as `0x${string}`;

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import random
 
-from .conftest import BASE_DESC, verdict_json
+from .conftest import BASE_DESC, install_anchor_mocks, verdict_json
 
 
 def _sum_treemap_values(mapping) -> int:
@@ -26,6 +26,10 @@ def test_randomized_accounting_invariant(contract, direct_vm, direct_accounts):
                 random.randint(0, 200),
                 random.randint(0, 50),
             )
+            direct_vm.clear_mocks()
+            install_anchor_mocks(direct_vm, f"example.com/work-{index}")
+            contract.anchor_work(work_id)
+            direct_vm.clear_mocks()
             work_ids.append(work_id)
             continue
 
@@ -71,8 +75,8 @@ def test_randomized_accounting_invariant(contract, direct_vm, direct_accounts):
         assert reserved <= int(contract.get_total_received())
 
 
-def test_bounty_payout_never_underflows(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_bounty_payout_never_underflows(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.value = 9
     contract.deposit_infringement_bounty(work_id)
 

@@ -8,7 +8,7 @@ The project lets creators register original works, sell usage licenses, and scan
 
 - Contract compiled and tested against GenVM v0.2.16 (`40 passed, 1 skipped`)
 - Reviewer-flagged runtime bugs fixed (see [CHANGELOG.md](CHANGELOG.md))
-- New Studionet deployment (2026-07-15): [`0x8372967d074C066EC2006782171d39E18eB5a46f`](https://studio.genlayer.com/contracts/0x8372967d074C066EC2006782171d39E18eB5a46f)
+- New Studionet deployment (2026-07-15): [`0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035`](https://studio.genlayer.com/contracts/0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035)
 - Live frontend: [https://license-logic.vercel.app](https://license-logic.vercel.app)
 
 ## Reviewer Feedback Addressed (2026-07-15 resubmission)
@@ -20,19 +20,35 @@ The project lets creators register original works, sell usage licenses, and scan
 
 ## Test Coverage
 
-Nine test modules cover registration, purchases, scanning, consensus rules, prompt injection, treasury invariants, edge cases, end-to-end flow, and the new views.
+Twelve test modules cover registration, purchases, scanning, consensus rules,
+prompt injection, treasury invariants, edge cases, end-to-end flow, views,
+anchor lifecycle, adversarial bounty replays, and alias-URL collapse.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install genlayer-test
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest tests -q
 ```
 
 Latest local result:
 
 ```text
-40 passed, 1 skipped
+66 passed, 1 skipped
 ```
+
+## Reproducible Lint
+
+`ruff.toml` at the repo root pins the ruleset; `requirements-dev.txt` pins the
+ruff version. Any environment installing `requirements-dev.txt` runs the same
+check the reviewer runs:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check contracts/ tests/
+```
+
+Expected: `All checks passed!`
 
 ## Project Layout
 

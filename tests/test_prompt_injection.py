@@ -32,8 +32,8 @@ from .conftest import BASE_DESC, prompt_canary, verdict_json
         ),
     ],
 )
-def test_injection_vectors_do_not_flip_mocked_verdict(registered_work, direct_vm, suspect_url, body):
-    contract, work_id = registered_work
+def test_injection_vectors_do_not_flip_mocked_verdict(anchored_work, direct_vm, suspect_url, body):
+    contract, work_id = anchored_work
     direct_vm.mock_web(suspect_url.replace("https://", ""), {"status": 200, "body": body})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",
@@ -46,8 +46,8 @@ def test_injection_vectors_do_not_flip_mocked_verdict(registered_work, direct_vm
     assert result["injection_attempt"] is False
 
 
-def test_canary_echo_marks_result_uncertain(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_canary_echo_marks_result_uncertain(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     suspect_url = "https://example.com/canary"
     body = "<html>copied structure</html>"
     direct_vm.mock_web("example.com/canary", {"status": 200, "body": body})

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from .conftest import CONTRACT_PATH, verdict_json
 
@@ -22,8 +21,8 @@ def test_consensus_principle_documents_adjacent_uncertain_rule():
     assert "within 25 points" in source
 
 
-def test_fetch_failure_returns_uncertain_without_increment(registered_work):
-    contract, work_id = registered_work
+def test_fetch_failure_returns_uncertain_without_increment(anchored_work):
+    contract, work_id = anchored_work
 
     result = json.loads(contract.scan_for_infringement(work_id, "https://example.com/unreachable"))
 
@@ -32,8 +31,8 @@ def test_fetch_failure_returns_uncertain_without_increment(registered_work):
     assert int(contract.get_infringement_count(work_id)) == 0
 
 
-def test_similarity_bucket_normalization_prevents_conflicting_verdict(registered_work, direct_vm):
-    contract, work_id = registered_work
+def test_similarity_bucket_normalization_prevents_conflicting_verdict(anchored_work, direct_vm):
+    contract, work_id = anchored_work
     direct_vm.mock_web("example.com/highscore", {"status": 200, "body": "<html>same content</html>"})
     direct_vm.mock_llm(
         "copyright/IP similarity judge",

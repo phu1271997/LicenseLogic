@@ -1,0 +1,36 @@
+# Reproducible lint configuration for the LicenseLogic Intelligent Contract.
+#
+# Run:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/ruff check contracts/
+#
+# The pinned version (ruff==0.16.2) matches CI so a green local run implies
+# a green CI run — no drift from newer default rule sets.
+
+target-version = "py310"
+line-length = 100
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # bugbear
+    "BLE",    # blind-except
+    "PIE",    # misc code smells
+    "RUF",    # ruff-specific
+    "UP",     # pyupgrade
+    "FURB",   # refurb-style modernizations
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line length — long consensus-principle strings are intentional
+    "F403",   # `from genlayer import *` is required by the GenVM sandbox
+    "F405",   # names come from the star import above
+    "UP007",  # keep `Optional[X]` where present; `X | None` may not survive older interpreters
+]
+
+[lint.per-file-ignores]
+# Tests can be looser (assert style, best-effort try/except, etc.).
+"tests/**" = ["BLE001", "S101", "B011", "SIM105"]

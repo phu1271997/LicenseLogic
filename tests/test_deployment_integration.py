@@ -8,8 +8,8 @@ import pytest
 from .conftest import addr_hex, verdict_json
 
 
-def test_direct_e2e_register_purchase_scan_verify(registered_work, direct_vm, direct_owner, direct_alice):
-    contract, work_id = registered_work
+def test_direct_e2e_register_purchase_scan_verify(anchored_work, direct_vm, direct_owner, direct_alice):
+    contract, work_id = anchored_work
 
     direct_vm.sender = direct_alice
     direct_vm.value = 100

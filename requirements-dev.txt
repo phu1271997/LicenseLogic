@@ -1,1 +1,2 @@
 genlayer-test
+ruff==0.16.2
