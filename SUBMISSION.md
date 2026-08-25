@@ -22,7 +22,9 @@ Rejected tags (checked against contract):
 - Jury Selection — the app does not pick jurors. Validator selection is GenLayer's, not the app's. Calling something "AI jury" in copy does not count.
 
 ## Logo
-`TO BE PROVIDED` — spec: PNG/JPEG/WebP, 128–2048 px, ≤ 2 MB. Concept: shield silhouette with a stylized clause-mark (§) inside, single mark on opaque dark card, accent color matching the app's indigo `--accent: #6366f1`. I can generate a matching SVG + PNG on request.
+Committed at `frontend/public/logo.svg` (source) + `logo-1024.png` (1.0 MB), `logo-512.png` (288 KB), `logo-128.png` (24 KB). Upload the 1024 to Portal.
+
+Motif: shield silhouette with a folded-corner document + checkmark inside — reads as "verified licensed work". Single mark, no text. Opaque dark card `#161624 → #07070C`, mark gradient `#A5B4FC → #6366F1 → #4338CA` matching the app header accent. Verified legible at 128 px.
 
 ## One-liner (179 / 180)
 > Register web content on-chain, then have GenLayer validators fetch any suspect URL, judge similarity with LLM consensus, and pay a bounty for the first honest infringement report.
