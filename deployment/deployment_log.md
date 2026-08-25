@@ -1,5 +1,36 @@
 # Deployment Log
 
+## 2026-08-25 Explorer-submission seeding (no contract change)
+
+Purpose: populate the deployed contract with reviewer-visible on-chain evidence so the Explorer listing has non-empty state to inspect. No contract changes; only seed writes.
+
+- Network: `studionet`
+- Contract address: `0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035`
+- Owner burner (ephemeral, funded from studionet auto-fund): `0x5bc9ed62a9d8FB4aDC4840Caf3e134bB2798e6bf`
+- Buyer burner (ephemeral): `0xBD601787f9D9E9CDA7C7c0d1255b95e3756Dd736`
+- Reseed script: `deployment/seed_studionet.mjs`
+
+Captured tx hashes (all reached `ACCEPTED` / `FINALIZED` on studionet):
+
+| Action | Tx hash |
+|---|---|
+| `register_work` → work_1 (docs.genlayer.com) | `0x246f202ca48287e90b3957f709dd2d13ddfaad027cc27eef9a3e52d2e1357738` |
+| `anchor_work(work_1)` | `0xc5a49b4ddc8fb6860d810c92245a03b4461248687ea92c417729ed60ba120563` |
+| `scan_for_infringement(work_1, docs.genlayer.com)` → INFRINGEMENT (shortcut) | `0x5063840d2ee20c7ffa72960466b34820a269fdb6f911d094c52233184d84b04b` |
+| `scan_for_infringement(work_1, example.com)` → CLEAR | `0xa62e8f13fdbb440310da1449acbc88842cc5802eaa1316714700ce7834817bd4` |
+| `deposit_infringement_bounty(work_1)` 5000 wei | `0x1184f6a270d634f2c28ab4b633206a008658f66f04c2b0ce23d22011a02c9886` |
+| `purchase_license(work_1)` 1000 wei from buyer burner | `0xc09a26f7c9b40b85a66662f29d09a95c8f01d3e4828471ef5d4428de783bb705` |
+| `register_work` → work_2 (Wikipedia optimistic rollup, unanchored) | `0x60fe0d1355bebd70ef4eb465c99aa5c64a5b77b0a3d5bd08bb60110e06f3ca78` |
+
+Post-seed on-chain reads:
+
+- `get_work_counter()` → `3`
+- `get_total_received()` → `6000`
+- `get_bounty("work_1")` → `5000`
+- `has_license("work_1", "0xBD60…d736")` → `true`
+- `get_anchor("work_1").anchored` → `true`; summary present.
+- `list_works()` returns 3 records (work_0 is an orphan from a prior burner; work_1 anchored + verdicts; work_2 registered only).
+
 ## 2026-08-16 Fifth Resubmission Deployment (steward: anchor-bound scan + canonical evidence)
 
 - Network: `studionet`

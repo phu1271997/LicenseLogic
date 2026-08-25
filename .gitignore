@@ -14,3 +14,8 @@ npm-debug.log*
 .vercel
 *.tsbuildinfo
 next-env.d.ts
+# operator-only burner keys used by deployment/seed_studionet.mjs
+.seed_pk
+.seed_owner_pk
+.seed_buyer_pk
+.seed_last_work_id
