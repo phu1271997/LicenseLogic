@@ -1,0 +1,37 @@
+# gltest configuration for LicenseLogic.
+#
+# Two suites live under tests/:
+#   fast — direct-mode with mocked LLM/web, no network. Default.
+#     .venv/bin/pytest tests -m 'not slow' -q
+#
+#   slow — read-only probes against the live studionet contract.
+#     Needs no funded wallet — only view calls.
+#     LICENSELOGIC_CONTRACT=0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035 \
+#       .venv/bin/pytest tests -m slow -q
+#
+# The gltest CLI can also drive any network below via --network <name>.
+
+networks:
+  default: localnet
+  localnet:
+    id: 61999
+    url: http://127.0.0.1:4000/api
+    chain_type: localnet
+  studionet:
+    id: 61999
+    url: https://studio.genlayer.com/api
+    chain_type: studionet
+  testnet_asimov:
+    id: 4221
+    url: https://studio.genlayer.com/api
+    chain_type: testnet_asimov
+  testnet_bradbury:
+    id: 4223
+    url: https://studio.genlayer.com/api
+    chain_type: testnet_bradbury
+
+paths:
+  contracts: contracts
+  artifacts: artifacts
+
+environment: .env
