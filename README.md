@@ -66,16 +66,28 @@ Expected: `All checks passed!`
 ## Project Layout
 
 ```text
-contracts/
-  license_logic.py
-  storage_test.py
-tests/
-deployment/
-frontend/
+contracts/          # Intelligent Contract (Python) + storage_test.py
+tests/              # pytest: 66 fast + 5 slow (studionet read-only)
+deployment/         # deployed_addresses.json + seed scripts + logs
+frontend/           # Next.js 16 + genlayer-js
+deliverables/       # Explorer submission draft + logo assets
+docs/adr/           # Architecture Decision Records
+docs/samples/       # walk-through scenarios
+ARCHITECTURE.md     # system diagram + storage model + trust boundaries
+ECONOMICS.md        # token flows + invariants + anti-abuse rules
+SECURITY.md         # 9-threat model + per-threat defense
+CONTRIBUTING.md     # dev loop + commit conventions + redeploy playbook
 DEPLOY.md
-test_inputs.md
 CHANGELOG.md
 ```
+
+## Further reading
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit together
+- [ECONOMICS.md](ECONOMICS.md) — where the GEN moves
+- [SECURITY.md](SECURITY.md) — what attacks we defend against
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to hack on this
+- [docs/adr/](docs/adr/) — key design decisions with tradeoffs
 
 ## Reproducible Deployment
 

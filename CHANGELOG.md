@@ -1,5 +1,75 @@
 # CHANGELOG
 
+## 2026-08-27 — Phase 1 Milestones (M1 Docs · M2 Security · M3 AI Enhancement)
+
+### M1 — Documentation Overhaul v1 (no contract change)
+
+New root docs (all cross-linked from README):
+- `ARCHITECTURE.md` — Mermaid system diagram, storage model, 2 consensus
+  paths (deterministic shortcut vs validator LLM jury), trust boundaries.
+- `ECONOMICS.md` — actor table, token-flow sequence diagram, per-event
+  effect table, invariants, anti-abuse rules, gas/consensus cost profile.
+- `SECURITY.md` — 9-threat model with per-threat defense + residual risk
+  (prompt injection, alias farming, self-scan farming, double-license,
+  overflow, reentrancy, LLM disagreement, spam, Studio storage reset).
+- `CONTRIBUTING.md` — dev loop, commit conventions, contract-change
+  checklist, redeploy playbook.
+- `docs/adr/` — 3 Architecture Decision Records covering the studionet
+  choice, URL canonicalization, and the `prompt_comparative` consensus
+  choice.
+- `docs/samples/` — 3 walk-through scenarios (fair use / verbatim copy /
+  prompt injection) so reviewers can pattern-match verdicts to real cases.
+
+### M2 — Security Hardening Bundle v1 (contract v6 — REDEPLOY REQUIRED)
+
+Contract additions (see `contracts/license_logic.py`):
+1. **Admin pause / unpause.** New `paused: bool` storage + `pause()` /
+   `unpause()` methods (admin-only) + `_require_not_paused()` guard in
+   every state-mutating method except `withdraw()` (safety valve).
+2. **Owner-controlled per-work scan freeze.** New
+   `work_scan_disabled: TreeMap[str, bool]` + `set_scans_disabled(work_id, disabled)`
+   (owner-only) + guard in `scan_for_infringement`. Lets an owner
+   temporarily block spam scans against their work without asking the
+   admin to pause the whole contract.
+3. **Two new views** — `is_paused()`, `get_scans_disabled(work_id)` — so
+   the frontend can show a banner.
+4. **Threat model documented** in `SECURITY.md` above (T1–T9 with
+   defenses).
+
+### M3 — AI Enhancement: Multi-perspective + Stricter Validator (v6)
+
+Contract changes (same v6 as M2 — one redeploy covers both):
+1. **Multi-perspective prompt.** `build_analysis_prompt` now instructs the
+   validator LLM to reason across three explicit lenses before its
+   verdict — **Legal** (copyright doctrine, fair use), **Forensic**
+   (verbatim overlap, structural mirroring), **Skeptic** (could this be
+   independent creation on a shared domain?). The verdict JSON now
+   carries a `perspectives` object with one short string per lens.
+2. **Stricter consensus principle.** `CONSENSUS_PRINCIPLE` tightened:
+   - similarity drift narrowed **±25 → ±15** points
+   - `matched_elements` must bucket-agree (both name `canonical_url`, or
+     both name something else, or both `none`) — mixed states are
+     disagreement
+   - `perspectives` must be present on both sides; each lens must not be
+     empty, though wording may differ
+3. **Frontend forward-compatibility.** When the on-chain verdict carries
+   `perspectives`, the UI renders a three-column breakdown in the
+   verdict panel. If the field is missing (old contract), the panel
+   degrades gracefully to the pre-M3 layout.
+
+### Tests
+
+`tests/test_security_pause.py` (5 cases) — admin-only gate on pause /
+unpause, write-methods blocked when paused, `withdraw()` still allowed
+when paused, owner-only gate on `set_scans_disabled`, scan reverts when
+disabled.
+
+`tests/test_multi_perspective.py` (4 cases) — prompt renders 3 named
+lenses, verdict JSON preserves `perspectives`, validator returns match on
+different wording, validator returns disagreement when a lens is empty.
+
+Existing fast suite still passes end-to-end: 66 → **75 passed**, 1 skip.
+
 ## 2026-08-16 — Fifth Resubmission (steward: anchor-bound scan + canonical evidence + reproducible lint)
 
 ### Reviewer Feedback Addressed
