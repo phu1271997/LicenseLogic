@@ -20,6 +20,8 @@ export const EXPLORER_BASE =
 
 const account = createAccount();
 
+export const BURNER_ADDRESS = account.address;
+
 export const client = createClient({
   chain: studionet,
   account,

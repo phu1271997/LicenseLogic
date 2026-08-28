@@ -7,6 +7,7 @@ import {
   readWithRetry,
   CONTRACT_ADDRESS,
   NETWORK_LABEL,
+  BURNER_ADDRESS,
   explorerUrl,
   txExplorerUrl,
   type WriteResult,
@@ -24,6 +25,13 @@ interface WorkInfo {
   bounty_pool?: number;
   anchored?: boolean;
   anchor_summary?: string;
+  scans_disabled?: boolean;
+}
+
+interface Perspectives {
+  legal?: string;
+  forensic?: string;
+  skeptic?: string;
 }
 
 interface Verdict {
@@ -37,6 +45,7 @@ interface Verdict {
   registered_url_shortcut?: boolean;
   fetch_failed?: boolean;
   injection_attempt?: boolean;
+  perspectives?: Perspectives;
 }
 
 interface WorkSummary {
@@ -160,6 +169,8 @@ export default function Home() {
   // Browse + live stats
   const [browseList, setBrowseList] = useState<WorkSummary[] | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  // v6 — admin pause status (silent if the view isn't on the deployed contract)
+  const [contractPaused, setContractPaused] = useState<boolean | null>(null);
 
   const stats = useMemo(() => {
     const list = browseList || [];
@@ -222,6 +233,15 @@ export default function Home() {
         // ignore — stats block will show — signs
       } finally {
         if (!cancel) setStatsLoading(false);
+      }
+
+      // v6 — probe is_paused. Old contracts don't expose it; treat any
+      // error as "not paused" and hide the banner.
+      try {
+        const p = await readContract("is_paused", []);
+        if (!cancel) setContractPaused(Boolean(p));
+      } catch {
+        if (!cancel) setContractPaused(null);
       }
     })();
     return () => {
@@ -393,7 +413,8 @@ export default function Home() {
     setStatus(null);
     setWorkInfo(null);
     try {
-      const result = await readContract("get_work", [normaliseWorkId(viewWorkId)]);
+      const workId = normaliseWorkId(viewWorkId);
+      const result = await readContract("get_work", [workId]);
       const parsed: WorkInfo =
         typeof result === "string" ? JSON.parse(result) : (result as unknown as WorkInfo);
       if ("error" in parsed) {
@@ -402,6 +423,14 @@ export default function Home() {
           msg: (parsed as unknown as { error: string }).error,
         });
       } else {
+        // v6 — enrich with scans_disabled if the view exists. Silent fallback
+        // to false on old contracts that don't expose the view.
+        try {
+          const disabled = await readContract("get_scans_disabled", [workId]);
+          parsed.scans_disabled = Boolean(disabled);
+        } catch {
+          parsed.scans_disabled = false;
+        }
         setWorkInfo(parsed);
         setStatus({ type: "success", msg: `Loaded ${parsed.work_id}` });
       }
@@ -412,6 +441,33 @@ export default function Home() {
       });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleToggleScans(workId: string, next: boolean) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep(next ? "Disabling scans…" : "Re-enabling scans…");
+    try {
+      const { hash, wait } = await writeContract("set_scans_disabled", [
+        workId,
+        next,
+      ]);
+      // Refresh the work — scans_disabled will reflect the new state.
+      setWorkInfo((prev) => (prev ? { ...prev, scans_disabled: next } : prev));
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Scans ${next ? "disabled" : "re-enabled"} for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Toggle failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
     }
   }
 
@@ -582,6 +638,14 @@ export default function Home() {
                 <span className="opacity-60" aria-hidden>↗</span>
               </a>
             </div>
+
+            {contractPaused && (
+              <div className="mb-5 px-4 py-3 rounded-lg border text-sm bg-orange-500/10 border-orange-500/30 text-orange-300">
+                <b>Contract is paused by admin.</b> Reads still work; writes
+                are temporarily frozen. <code className="font-mono text-xs">withdraw()</code>{" "}
+                stays available as a safety valve.
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="gl-scroll-x -mx-2 px-2 mb-5">
@@ -859,6 +923,55 @@ export default function Home() {
                       <p className="text-xs text-[color:var(--foreground-muted)] mb-1">Description</p>
                       <p className="text-sm">{workInfo.work_desc}</p>
                     </div>
+                    {(() => {
+                      const isOwner =
+                        !!workInfo.owner &&
+                        workInfo.owner.toLowerCase() === BURNER_ADDRESS.toLowerCase();
+                      if (!isOwner && !workInfo.scans_disabled) return null;
+                      return (
+                        <div className="p-3 gl-card rounded-xl space-y-2">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <p className="text-xs text-[color:var(--foreground-muted)]">
+                              Scan availability{" "}
+                              <span
+                                className={`ml-2 px-2 py-0.5 rounded-full text-[10px] border ${
+                                  workInfo.scans_disabled
+                                    ? "bg-orange-500/10 border-orange-500/30 text-orange-300"
+                                    : "bg-green-500/10 border-green-500/30 text-green-300"
+                                }`}
+                              >
+                                {workInfo.scans_disabled ? "disabled by owner" : "open"}
+                              </span>
+                              {isOwner && (
+                                <span className="ml-2 gl-chip text-[10px]">you are the owner</span>
+                              )}
+                            </p>
+                            {isOwner && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleToggleScans(
+                                    workInfo.work_id,
+                                    !workInfo.scans_disabled
+                                  )
+                                }
+                                disabled={loading}
+                                className="gl-btn-ghost px-3 py-1.5 text-xs rounded-lg font-semibold"
+                              >
+                                {workInfo.scans_disabled
+                                  ? "Re-enable scans"
+                                  : "Disable scans"}
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-[color:var(--foreground-muted)]">
+                            v6 · owner-only kill switch to freeze{" "}
+                            <code className="font-mono">scan_for_infringement</code>{" "}
+                            against this work without pausing the whole contract.
+                          </p>
+                        </div>
+                      );
+                    })()}
                     <div className="p-3 gl-card rounded-xl space-y-2">
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-[color:var(--foreground-muted)]">
@@ -1074,7 +1187,11 @@ export default function Home() {
             />
             <SignalCard
               name="similarity"
-              body="Integer 0–100. Must sit inside its declared bucket and be within 25 points of the leader — larger drift is disagreement."
+              body="Integer 0–100. Must sit inside its declared bucket and be within 15 points of the leader (tightened in v6) — larger drift is disagreement."
+            />
+            <SignalCard
+              name="perspectives (v6)"
+              body="Every verdict carries three named lenses — legal / forensic / skeptic. Each is a non-empty sentence. Consensus principle rejects a validator that skipped a lens."
             />
           </div>
         </SectionShell>
@@ -1465,6 +1582,19 @@ function VerdictExampleCard({
   );
 }
 
+function PerspectiveCell({ label, body }: { label: string; body?: string }) {
+  return (
+    <div className="p-3 gl-card rounded-lg">
+      <div className="text-[10px] uppercase tracking-widest text-[color:var(--accent-2)] mb-1">
+        {label}
+      </div>
+      <p className="text-xs text-[color:var(--foreground)] leading-relaxed">
+        {body?.trim() || <span className="text-[color:var(--foreground-muted)] italic">no lens returned</span>}
+      </p>
+    </div>
+  );
+}
+
 function SignalCard({ name, body }: { name: string; body: string }) {
   return (
     <div className="gl-card p-5">
@@ -1599,6 +1729,19 @@ function VerdictPanel({ v }: { v: Verdict }) {
         <p className="text-xs text-[color:var(--foreground-muted)] mb-1">Matched elements</p>
         <p className="text-xs font-mono">{v.matched_elements}</p>
       </div>
+      {v.perspectives && (v.perspectives.legal || v.perspectives.forensic || v.perspectives.skeptic) && (
+        <div>
+          <p className="text-xs text-[color:var(--foreground-muted)] mb-2">
+            Validator perspectives{" "}
+            <span className="gl-chip gl-chip-accent text-[10px]">v6 · multi-lens</span>
+          </p>
+          <div className="grid md:grid-cols-3 gap-2">
+            <PerspectiveCell label="Legal" body={v.perspectives.legal} />
+            <PerspectiveCell label="Forensic" body={v.perspectives.forensic} />
+            <PerspectiveCell label="Skeptic" body={v.perspectives.skeptic} />
+          </div>
+        </div>
+      )}
       {(v.already_credited || v.registered_url_shortcut || v.fetch_failed || v.injection_attempt) && (
         <div className="flex flex-wrap gap-2">
           {v.already_credited && (
