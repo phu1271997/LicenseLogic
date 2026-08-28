@@ -10,7 +10,8 @@ def test_contract_source_uses_prompt_comparative():
 
     assert "gl.eq_principle.prompt_comparative" in source
     assert "gl.vm.run_nondet_unsafe" not in source
-    assert "return True" not in source
+    # No hand-written validator_fn that just returns True for any input.
+    assert "def validator_fn" not in source
 
 
 def test_consensus_principle_documents_adjacent_uncertain_rule():
@@ -18,7 +19,10 @@ def test_consensus_principle_documents_adjacent_uncertain_rule():
 
     assert "INFRINGEMENT and CLEAR are NEVER compatible" in source
     assert "UNCERTAIN is adjacent to both" in source
-    assert "within 25 points" in source
+    # v6 tightened the similarity drift bound.
+    assert "within 15 points" in source
+    # v6 introduced multi-perspective reasoning.
+    assert "perspectives object MUST be present" in source
 
 
 def test_fetch_failure_returns_uncertain_without_increment(anchored_work):
