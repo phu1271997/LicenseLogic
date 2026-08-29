@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2",
+    "deployed_at": "2026-08-29T00:00:00+07:00",
+    "deployment_tx_hash": "PENDING_FILL",
+    "deployer_address": "PENDING_FILL",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v6 — Phase 1 milestones bundle (M2 Security Hardening + M3 AI Enhancement). New methods: pause/unpause/set_scans_disabled + is_paused/get_scans_disabled views. Verdict JSON gains perspectives {legal, forensic, skeptic}. CONSENSUS_PRINCIPLE tightened: similarity ±25 → ±15, matched_elements bucket agreement, perspectives required. Docs (M1) shipped alongside — no contract change for M1. See CHANGELOG.md 2026-08-27 section."
+  },
+  "studionet_previous_v5": {
     "contract_address": "0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035",
     "deployed_at": "2026-08-16T00:00:00+07:00",
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "2026-08-16 fifth resubmission. Steward feedback: scans now anchor-bound (revert if unanchored), evidence identity canonicalized (http↔https, case, www., tracking params, trailing slash, fragment, default port), new get_canonical_url view, alias-replay tests, reproducible lint (ruff.toml + pinned ruff==0.16.2). See CHANGELOG.md."
+    "notes": "Fifth resubmission. Steward feedback: scans now anchor-bound (revert if unanchored), evidence identity canonicalized, alias-replay tests, reproducible lint. Superseded by v6."
   },
   "studionet_previous_v4": {
     "contract_address": "0x8372967d074C066EC2006782171d39E18eB5a46f",
@@ -13,7 +21,7 @@
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "Superseded by the 2026-08-16 build above. Kept for historical reference."
+    "notes": "Superseded. Kept for historical reference."
   },
   "studionet_previous_v3": {
     "contract_address": "0xee3bA410d441aF48a8B4AaFC822b5C145facA8D7",

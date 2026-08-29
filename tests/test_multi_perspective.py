@@ -12,9 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 
-import pytest
-
-from .conftest import CONTRACT_PATH, verdict_json
+from .conftest import CONTRACT_PATH
 
 
 def _load_contract_module():

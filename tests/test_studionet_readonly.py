@@ -5,7 +5,7 @@ so no funded wallet is needed. Confirms the on-chain state a reviewer will
 see when they open the app.
 
 Enable with:
-    LICENSELOGIC_CONTRACT=0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035 \\
+    LICENSELOGIC_CONTRACT=0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2 \\
         .venv/bin/pytest tests -m slow -q
 
 If LICENSELOGIC_CONTRACT is unset, tests are skipped so the fast suite stays
@@ -18,7 +18,7 @@ import os
 
 import pytest
 
-DEFAULT_CONTRACT = "0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035"
+DEFAULT_CONTRACT = "0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2"
 CONTRACT_ADDR = os.getenv("LICENSELOGIC_CONTRACT", "")
 NETWORK_ENABLED = bool(CONTRACT_ADDR) or os.getenv("RUN_STUDIONET_TESTS") == "1"
 
@@ -49,7 +49,7 @@ def _read(client, addr, fn, args=None):
 
 def test_work_counter_progresses(gl_client, addr):
     counter = int(_read(gl_client, addr, "get_work_counter"))
-    assert counter >= 3, f"expected at least 3 seeded works, got {counter}"
+    assert counter >= 1, f"expected at least 1 seeded work, got {counter}"
 
 
 def test_list_works_returns_json(gl_client, addr):
@@ -73,17 +73,17 @@ def test_canonical_url_view(gl_client, addr):
     assert canonical == "https://example.com/a", f"got {canonical!r}"
 
 
-def test_seeded_work_1_is_anchored(gl_client, addr):
-    raw = _read(gl_client, addr, "get_work", ["work_1"])
+def test_seeded_work_0_is_anchored(gl_client, addr):
+    raw = _read(gl_client, addr, "get_work", ["work_0"])
     parsed = json.loads(raw) if isinstance(raw, str) else raw
-    assert parsed.get("work_id") == "work_1"
-    assert parsed.get("anchored") is True, "work_1 should be anchored — reseed if not"
+    assert parsed.get("work_id") == "work_0"
+    assert parsed.get("anchored") is True, "work_0 should be anchored — reseed if not"
     assert parsed.get("infringement_count", 0) >= 1
 
 
-def test_seeded_clear_verdict_readable(gl_client, addr):
-    """Latest seed pass wrote a CLEAR verdict on work_3 for example.com."""
-    for wid in ("work_3", "work_1"):
+def test_seeded_clear_verdict_has_perspectives(gl_client, addr):
+    """v6 seed writes a CLEAR verdict on work_0 for example.com — with perspectives."""
+    for wid in ("work_0", "work_1", "work_3"):
         raw = _read(
             gl_client,
             addr,
@@ -97,5 +97,21 @@ def test_seeded_clear_verdict_readable(gl_client, addr):
         if parsed.get("verdict") == "CLEAR":
             assert parsed.get("similarity", 100) < 40, parsed
             assert parsed.get("fetch_failed") is False
+            p = parsed.get("perspectives") or {}
+            assert set(p.keys()) >= {"legal", "forensic", "skeptic"}, p
+            for lens in ("legal", "forensic", "skeptic"):
+                assert isinstance(p[lens], str) and p[lens].strip(), lens
             return
     pytest.skip("no CLEAR verdict on chain yet — run deployment/seed_studionet.mjs")
+
+
+def test_v6_pause_view_exists(gl_client, addr):
+    """v6 exposed a `is_paused` view. Live contract should return False by default."""
+    raw = _read(gl_client, addr, "is_paused")
+    assert bool(raw) is False, "contract unexpectedly paused on studionet"
+
+
+def test_v6_scans_disabled_view_exists(gl_client, addr):
+    """v6 exposed per-work scan-disable state; default is False."""
+    raw = _read(gl_client, addr, "get_scans_disabled", ["work_0"])
+    assert bool(raw) is False, "work_0 unexpectedly has scans disabled"
