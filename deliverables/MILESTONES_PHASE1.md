@@ -7,12 +7,15 @@ on 2026-08-27 (SHA range `87e61f6..811069a`).
 Total Phase 1 estimated value: **1,500 – 3,300 points** across the three
 submissions.
 
-> ⚠️ **Contract redeploy status.** M1 is submittable today (docs only).
-> M2 and M3 require a fresh studionet deploy of `contracts/license_logic.py`
-> so the new methods (`pause`, `unpause`, `set_scans_disabled`,
-> `is_paused`, `get_scans_disabled`) and the new verdict JSON schema
-> (with `perspectives`) are live on-chain. See "Redeploy checklist"
-> below before submitting M2 / M3.
+> ✅ **Contract redeploy complete (2026-08-29).** v6 lives at
+> `0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2`. Frontend env swapped,
+> studionet reseeded (work_0 anchored + INFRINGEMENT via URL shortcut
+> with perspectives + CLEAR via real validator LLMs with per-lens
+> reasoning + bounty + license), Vercel prod re-aliased.
+>
+> **Consolidated single-submission version** (user asked for one combined
+> submission, not three separate ones) lives at the bottom of this file
+> under "CONSOLIDATED PHASE 1 SUBMISSION".
 
 ---
 
@@ -136,11 +139,40 @@ AI Enhancement — LEGAL / FORENSIC / SKEPTIC multi-perspective prompt + stricte
 
 ```
 $ .venv/bin/pytest tests -m 'not slow' -q
-...
-75 passed, 1 skipped, 5 deselected in 0.71s
+75 passed, 1 skipped, 5 deselected in 0.78s
 
-$ LICENSELOGIC_CONTRACT=<current addr> \
+$ LICENSELOGIC_CONTRACT=0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2 \
     .venv/bin/pytest tests -m slow -q
-...
-5 passed, 71 deselected
+7 passed, 76 deselected in 11.72s
 ```
+
+---
+
+## CONSOLIDATED PHASE 1 SUBMISSION (single-post version)
+
+### Title
+Phase 1 Bundle — Documentation Overhaul + Security Hardening (admin pause + owner scan-freeze) + AI Enhancement (multi-perspective + stricter validator)
+
+### Changes & Improvements (995 / 1000)
+
+> Redeployed contract v6 at 0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2. Three bundled improvements:
+>
+> M1 DOCS — added ARCHITECTURE.md (Mermaid + storage model), ECONOMICS.md (token-flow + invariants), SECURITY.md (9-threat model), CONTRIBUTING.md (redeploy playbook), 3 ADRs, 3 sample scenarios.
+>
+> M2 SECURITY — admin pause() / unpause() + _require_not_paused() guard on every write except withdraw() (safety valve). Owner set_scans_disabled(work_id) freezes scans per-work without pausing the contract. New views is_paused() + get_scans_disabled(). Frontend shows orange pause banner + owner-only toggle.
+>
+> M3 AI — build_analysis_prompt asks LLM to reason across LEGAL / FORENSIC / SKEPTIC lenses before verdict. JSON gains perspectives {legal, forensic, skeptic}. CONSENSUS_PRINCIPLE tightened: similarity ±25 → ±15, matched_elements bucket-agreement, perspectives required. Error branches emit constant per-branch perspectives.
+>
+> Fast tests 66 → 75. Slow tests 5 → 7 (probe v6 views).
+
+### Evidence links
+
+- Live contract on Explorer: <https://explorer-studio.genlayer.com/address/0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2>
+- Contract v6 commit diff: <https://github.com/phu1271997/LicenseLogic/commit/f7ab41f>
+- SECURITY.md (9-threat model): <https://github.com/phu1271997/LicenseLogic/blob/main/SECURITY.md>
+- ARCHITECTURE.md (Mermaid diagram): <https://github.com/phu1271997/LicenseLogic/blob/main/ARCHITECTURE.md>
+- ADR-003 (why prompt_comparative): <https://github.com/phu1271997/LicenseLogic/blob/main/docs/adr/ADR-003-prompt-comparative-consensus.md>
+- New pause / scan-freeze tests: <https://github.com/phu1271997/LicenseLogic/blob/main/tests/test_security_pause.py>
+- New multi-perspective tests: <https://github.com/phu1271997/LicenseLogic/blob/main/tests/test_multi_perspective.py>
+- CHANGELOG anchor: <https://github.com/phu1271997/LicenseLogic/blob/main/CHANGELOG.md#2026-08-27--phase-1-milestones-m1-docs--m2-security--m3-ai-enhancement>
+- Sample on-chain CLEAR verdict tx (real LLM, carries perspectives): `0xa03c0e633446c510f1e534de7fa5f2e7aab94b2c617daf2225e40cfea8b9dbe0`
