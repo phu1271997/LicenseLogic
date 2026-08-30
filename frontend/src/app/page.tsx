@@ -48,6 +48,23 @@ interface Verdict {
   perspectives?: Perspectives;
 }
 
+interface AppealView {
+  verdict_key: string;
+  state: string; // "none" | "pending" | "overturned" | "upheld"
+  stake: number;
+  appellant: string;
+  scanner: string;
+  resolution_reason: string;
+}
+
+interface Reputation {
+  address: string;
+  honest_scans: number;
+  overturned_scans: number;
+  tier: string; // bronze | silver | gold
+  bounty_share_pct: number;
+}
+
 interface WorkSummary {
   work_id: string;
   owner: string;
@@ -171,6 +188,12 @@ export default function Home() {
   const [statsLoading, setStatsLoading] = useState(true);
   // v6 — admin pause status (silent if the view isn't on the deployed contract)
   const [contractPaused, setContractPaused] = useState<boolean | null>(null);
+  // v7 — appeal state for the currently-displayed verdict (if any)
+  const [appealView, setAppealView] = useState<AppealView | null>(null);
+  const [requiredStake, setRequiredStake] = useState<number | null>(null);
+  const [appealStake, setAppealStake] = useState<string>("");
+  // v7 — burner's scanner reputation, shown in the nav
+  const [myRep, setMyRep] = useState<Reputation | null>(null);
 
   const stats = useMemo(() => {
     const list = browseList || [];
@@ -242,6 +265,16 @@ export default function Home() {
         if (!cancel) setContractPaused(Boolean(p));
       } catch {
         if (!cancel) setContractPaused(null);
+      }
+
+      // v7 — burner reputation. Silent fallback on old contracts.
+      try {
+        const raw = await readContract("get_scanner_reputation", [BURNER_ADDRESS]);
+        const parsed: Reputation =
+          typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as Reputation);
+        if (!cancel) setMyRep(parsed);
+      } catch {
+        if (!cancel) setMyRep(null);
       }
     })();
     return () => {
@@ -321,11 +354,91 @@ export default function Home() {
     }
   }
 
+  const refreshAppealAndRep = useCallback(
+    async (workId: string, url: string) => {
+      try {
+        const raw = await readContract("get_appeal", [workId, url]);
+        const parsed: AppealView =
+          typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as AppealView);
+        setAppealView(parsed);
+      } catch {
+        setAppealView(null);
+      }
+      try {
+        const raw = await readContract("get_appeal_required_stake", [workId]);
+        setRequiredStake(Number(raw));
+      } catch {
+        setRequiredStake(null);
+      }
+      try {
+        const raw = await readContract("get_scanner_reputation", [BURNER_ADDRESS]);
+        const parsed: Reputation =
+          typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as Reputation);
+        setMyRep(parsed);
+      } catch {
+        // ignore
+      }
+    },
+    []
+  );
+
+  async function handleFileAppeal(workId: string, url: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Filing appeal + staking…");
+    try {
+      const stakeWei = BigInt(appealStake || String(requiredStake || 0));
+      const { hash, wait } = await writeContract(
+        "file_appeal",
+        [workId, url],
+        stakeWei
+      );
+      await refreshAppealAndRep(workId, url);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Appeal filed for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Appeal failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleResolveAppeal(workId: string, url: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Re-scanning + reaching consensus on appeal (can take a minute)…");
+    try {
+      const { hash, wait } = await writeContract("resolve_appeal", [workId, url]);
+      await refreshAppealAndRep(workId, url);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Appeal resolved for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Resolve failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
   async function handleScan(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setStatus(null);
     setVerdictResult(null);
+    setAppealView(null);
     setLoadingStep("Submitting scan…");
     try {
       const workId = normaliseWorkId(scanWorkId);
@@ -347,6 +460,9 @@ export default function Home() {
       const parsed: Verdict =
         typeof verdictRaw === "string" ? JSON.parse(verdictRaw) : (verdictRaw as Verdict);
       setVerdictResult(parsed);
+      // v7 — after scan lands, load the appeal view so the panel can offer
+      // "Appeal" or "Resolve" buttons where applicable. Silent on old contract.
+      await refreshAppealAndRep(workId, scanUrl);
       setStatus({
         type: wait.timedOut
           ? "warn"
@@ -481,7 +597,7 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* ─── Sticky Nav ─── */}
-      <StickyNav />
+      <StickyNav rep={myRep} />
 
       <main className="flex-1">
         {/* ─── Hero ─── */}
@@ -863,7 +979,22 @@ export default function Home() {
                   </button>
                 </form>
 
-                {verdictResult && <VerdictPanel v={verdictResult} />}
+                {verdictResult && (
+                  <VerdictPanel
+                    v={verdictResult}
+                    appeal={appealView}
+                    requiredStake={requiredStake}
+                    appealStake={appealStake}
+                    onStakeChange={setAppealStake}
+                    onFileAppeal={() =>
+                      handleFileAppeal(normaliseWorkId(scanWorkId), scanUrl)
+                    }
+                    onResolveAppeal={() =>
+                      handleResolveAppeal(normaliseWorkId(scanWorkId), scanUrl)
+                    }
+                    loading={loading}
+                  />
+                )}
               </div>
             )}
 
@@ -1410,7 +1541,12 @@ export default function Home() {
 // Presentational components
 // ─────────────────────────────────────────────────────────────
 
-function StickyNav() {
+function StickyNav({ rep }: { rep?: Reputation | null }) {
+  const tierColor: Record<string, string> = {
+    bronze: "bg-amber-700/20 border-amber-700/40 text-amber-200",
+    silver: "bg-slate-400/20 border-slate-400/40 text-slate-100",
+    gold: "bg-yellow-500/20 border-yellow-500/40 text-yellow-200",
+  };
   return (
     <header className="gl-nav sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-5 h-16 flex items-center justify-between gap-3">
@@ -1438,6 +1574,14 @@ function StickyNav() {
           ))}
         </nav>
         <div className="flex items-center gap-2">
+          {rep && (
+            <span
+              className={`hidden lg:inline gl-chip ${tierColor[rep.tier] || ""} font-mono`}
+              title={`Your reputation: ${rep.honest_scans} honest / ${rep.overturned_scans} overturned · ${rep.bounty_share_pct}% bounty share`}
+            >
+              you · {rep.tier}
+            </span>
+          )}
           <span className="hidden lg:inline gl-chip">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 gl-live-dot" />
             {NETWORK_LABEL}
@@ -1707,7 +1851,25 @@ function FaqItem({ q, a }: { q: string; a: string }) {
   );
 }
 
-function VerdictPanel({ v }: { v: Verdict }) {
+function VerdictPanel({
+  v,
+  appeal,
+  requiredStake,
+  appealStake,
+  onStakeChange,
+  onFileAppeal,
+  onResolveAppeal,
+  loading,
+}: {
+  v: Verdict;
+  appeal?: AppealView | null;
+  requiredStake?: number | null;
+  appealStake?: string;
+  onStakeChange?: (s: string) => void;
+  onFileAppeal?: () => void;
+  onResolveAppeal?: () => void;
+  loading?: boolean;
+}) {
   return (
     <div className="mt-6 p-5 gl-card space-y-4">
       <div className="flex items-center justify-between">
@@ -1777,6 +1939,119 @@ function VerdictPanel({ v }: { v: Verdict }) {
           </p>
         )}
       </div>
+      <AppealPanel
+        v={v}
+        appeal={appeal}
+        requiredStake={requiredStake}
+        appealStake={appealStake}
+        onStakeChange={onStakeChange}
+        onFileAppeal={onFileAppeal}
+        onResolveAppeal={onResolveAppeal}
+        loading={loading}
+      />
+    </div>
+  );
+}
+
+function AppealPanel({
+  v,
+  appeal,
+  requiredStake,
+  appealStake,
+  onStakeChange,
+  onFileAppeal,
+  onResolveAppeal,
+  loading,
+}: {
+  v: Verdict;
+  appeal?: AppealView | null;
+  requiredStake?: number | null;
+  appealStake?: string;
+  onStakeChange?: (s: string) => void;
+  onFileAppeal?: () => void;
+  onResolveAppeal?: () => void;
+  loading?: boolean;
+}) {
+  const isAppealable =
+    v.verdict === "INFRINGEMENT" &&
+    !v.registered_url_shortcut &&
+    !v.fetch_failed;
+  const state = appeal?.state || "none";
+
+  if (!isAppealable && state === "none") return null;
+
+  const stateStyles: Record<string, string> = {
+    none: "bg-white/5 border-card-border text-[color:var(--foreground-muted)]",
+    pending: "bg-yellow-500/10 border-yellow-500/30 text-yellow-300",
+    overturned: "bg-emerald-500/10 border-emerald-500/30 text-emerald-300",
+    upheld: "bg-blue-500/10 border-blue-500/30 text-blue-300",
+  };
+  return (
+    <div className="pt-3 border-t border-card-border space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Appeal
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">v7 · dispute layer</span>
+        </p>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded-full border font-mono ${stateStyles[state] || stateStyles.none}`}
+        >
+          {state}
+        </span>
+      </div>
+      {state === "none" && isAppealable && (
+        <div className="space-y-2">
+          <p className="text-xs text-[color:var(--foreground-muted)]">
+            Stake <b className="text-[color:var(--foreground)]">{requiredStake ?? "…"} wei</b>{" "}
+            (2 × penalty) to trigger a validator-consensus re-scan. OVERTURN refunds you + slashes the scanner. UPHELD forfeits your stake to the owner.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={appealStake ?? ""}
+              onChange={(e) => onStakeChange?.(e.target.value)}
+              placeholder={requiredStake ? String(requiredStake) : "stake wei"}
+              className="flex-1"
+              min="0"
+            />
+            <button
+              type="button"
+              onClick={onFileAppeal}
+              disabled={loading || !onFileAppeal}
+              className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+            >
+              File appeal
+            </button>
+          </div>
+        </div>
+      )}
+      {state === "pending" && (
+        <div className="space-y-2">
+          <p className="text-xs text-[color:var(--foreground-muted)]">
+            Appellant staked{" "}
+            <span className="font-mono text-[color:var(--foreground)]">
+              {appeal?.stake} wei
+            </span>
+            . Trigger the re-scan to get a fresh validator consensus.
+          </p>
+          <button
+            type="button"
+            onClick={onResolveAppeal}
+            disabled={loading || !onResolveAppeal}
+            className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold"
+          >
+            Resolve appeal (re-scan + consensus)
+          </button>
+        </div>
+      )}
+      {(state === "overturned" || state === "upheld") && appeal && (
+        <div className="space-y-1">
+          <p className="text-xs text-[color:var(--foreground-muted)]">
+            Resolution reasoning:
+          </p>
+          <p className="text-sm">{appeal.resolution_reason || "(no reasoning stored)"}</p>
+        </div>
+      )}
     </div>
   );
 }
