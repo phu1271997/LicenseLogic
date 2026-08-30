@@ -119,6 +119,39 @@ paused state as a safety valve.
 **Residual risk.** No per-block rate limit yet; block-timestamp visibility
 inside a nondet block is version-dependent. Planned for Phase 2.
 
+### T10 — False-positive INFRINGEMENT (v7)
+
+**Attack.** A scanner submits a page that is genuinely fair use or
+unrelated but the LLM path returns INFRINGEMENT (either through
+adversarial prompting, overfitting on a hot phrase, or a lucky
+disagreement window). Bounty pays out; the accused site has no recourse.
+
+**Defense.** `file_appeal(work_id, suspect_url)` lets any wallet (except
+the original scanner) stake `2 × penalty_amount` and force a
+`resolve_appeal` re-scan. The re-scan uses `build_appeal_prompt` — a
+prompt that explicitly biases toward OVERTURN under ambiguity — and a
+stricter `APPEAL_PRINCIPLE` (exact outcome match, outcome-similarity
+consistency). OVERTURN refunds the appellant, rolls back the count, and
+slashes the scanner's reputation. UPHELD forwards the stake to the work
+owner as damages and confirms the scanner.
+
+**Residual risk.** An appellant must have `2 × penalty` in GEN. Owners
+who set a very high penalty implicitly raise the appeal bar. The tunable
+is intentionally in the owner's hands.
+
+### T11 — Farmed reputation (v7)
+
+**Attack.** A scanner spams cheap INFRINGEMENT scans against many
+low-stakes works to reach gold tier fast and then farm high-bounty
+works at 20 %.
+
+**Defense.** URL-shortcut hits do NOT bump `scanner_honest`. A scanner
+must win the LLM path to build reputation, and each overturn on appeal
+decrements `scanner_honest` and increments `scanner_overturned`, both of
+which push tier back down. Gold requires ≥ 10 honest **and** zero
+overturns (or ≥ 20 with at most one overturn). One successful appeal
+costs a scanner a tier.
+
 ### T9 — Studio storage reset
 
 **Attack.** Not an attack — but Studio may reset storage between builds.

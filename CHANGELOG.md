@@ -1,5 +1,80 @@
 # CHANGELOG
 
+## 2026-08-31 — Phase 2 Milestones (F1 Appeal Flow · F2 Scanner Reputation)
+
+Contract v7 (redeploy required). Bundles two major features that make the
+dispute layer real economics instead of a one-shot decision.
+
+### F1 — Appeal / Dispute Flow
+
+Any INFRINGEMENT verdict that came from the LLM path (not the URL
+shortcut) can now be appealed. New API:
+
+- `file_appeal(work_id, suspect_url)` — payable. Requires the prior
+  verdict was INFRINGEMENT, no appeal has already resolved, and the
+  caller stakes `2 * penalty_amount[work_id]`. The original scanner
+  cannot file. If penalty is 0, appeals are disabled for that work.
+- `resolve_appeal(work_id, suspect_url)` — anyone can trigger. Runs a
+  fresh `gl.nondet.web.render` + `gl.nondet.exec_prompt` with a
+  purpose-built `build_appeal_prompt` (frames the model as an appeals
+  adjudicator that must bias toward OVERTURN under ambiguity) under a
+  new stricter `APPEAL_PRINCIPLE` (outcome must match exactly, similarity
+  ±15, outcome-similarity consistency).
+- **OVERTURN outcome:** appellant refunded, `scan_credited` rolled back,
+  `infringement_count` decremented, scanner's honest count decremented,
+  scanner's overturn count incremented (visible in reputation).
+- **UPHELD outcome:** stake redirected to the work owner via
+  `withdrawable_balance`; scanner's honest count incremented.
+- New views: `get_appeal(work_id, suspect_url)`,
+  `get_appeal_required_stake(work_id)`.
+
+### F2 — Scanner Reputation
+
+Every honest INFRINGEMENT scan on the real LLM path bumps
+`scanner_honest[addr]`. Every appeal that overturns a verdict bumps
+`scanner_overturned[addr]`. URL-shortcut hits do NOT count — the shortcut
+is deterministic, so it can not prove judgment.
+
+Bounty payout now scales with tier instead of the flat 10 %:
+
+- **Gold** (≥ 10 honest, 0 overturned — or ≥ 20 honest, ≤ 1 overturned): 20 %
+- **Silver** (≥ 3 honest, ≤ 1 overturned): 15 %
+- **Bronze** (default): 10 %
+
+New view: `get_scanner_reputation(addr)` returns
+`{address, honest_scans, overturned_scans, tier, bounty_share_pct}`.
+
+### Storage additions (v7)
+
+- `appeal_stake: TreeMap[str, u256]`
+- `appeal_appellant: TreeMap[str, str]`
+- `appeal_scanner: TreeMap[str, str]` — remembered from the original scan
+- `appeal_state: TreeMap[str, str]` — "pending" | "overturned" | "upheld"
+- `appeal_outcome_reason: TreeMap[str, str]`
+- `scanner_honest: TreeMap[str, u256]`
+- `scanner_overturned: TreeMap[str, u256]`
+
+### Frontend
+
+- `VerdictPanel` now renders an `AppealPanel` inline for appealable
+  verdicts: shows required stake, an input + "File appeal" button, then
+  a "Resolve appeal (re-scan + consensus)" button once state is
+  `pending`, and the resolution reasoning when state is `overturned` or
+  `upheld`. Degrades cleanly on old contracts that lack the views.
+- StickyNav shows a live reputation chip for the burner —
+  `you · bronze / silver / gold` — with a hover tooltip breaking down
+  honest/overturned/bounty share.
+
+### Tests
+
+- `tests/test_appeal_flow.py` (7 cases) — file, uphold-refund-to-owner,
+  overturn-refund-and-slash, original-scanner-blocked, underfunded stake,
+  view state transitions, required-stake view.
+- `tests/test_reputation.py` (5 cases) — bronze default, bronze payout
+  10 %, silver at 3 hits, gold at 10 hits, shortcut does not advance rep.
+
+Fast suite: 75 → **87 passed**, 1 skip.
+
 ## 2026-08-27 — Phase 1 Milestones (M1 Docs · M2 Security · M3 AI Enhancement)
 
 ### M1 — Documentation Overhaul v1 (no contract change)

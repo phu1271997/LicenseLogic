@@ -39,6 +39,30 @@ sequenceDiagram
     C->>S: emit_transfer(value=balance)
 ```
 
+## v7 additions — appeals and reputation-tiered payouts
+
+### Appeal flow
+- **Stake to file:** `2 × penalty_amount[work_id]` (`get_appeal_required_stake` view).
+- **OVERTURN outcome:** appellant refunded via `withdrawable_balance`;
+  `scan_credited[key] = False`; `infringement_count -= 1`; scanner
+  `honest_scans -= 1` and `overturned_scans += 1`.
+- **UPHELD outcome:** stake → owner via `withdrawable_balance`; scanner
+  `honest_scans += 1`.
+- The trigger caller (whoever runs `resolve_appeal`) pays gas but earns
+  no reward — prevents gaming the trigger.
+
+### Reputation-tiered bounty share
+The old flat 10 % of pool per honest INFRINGEMENT now scales with tier:
+
+| Tier   | Threshold                                     | Bounty share |
+|--------|-----------------------------------------------|--------------|
+| Bronze | default                                       | 10 %         |
+| Silver | ≥ 3 honest, ≤ 1 overturned                    | 15 %         |
+| Gold   | ≥ 10 honest, 0 overturned (or ≥ 20 with ≤ 1) | 20 %         |
+
+Only real LLM-path INFRINGEMENT counts toward `honest_scans`. URL
+shortcuts are deterministic and don't prove judgment.
+
 ## Formulas
 
 | Event                                     | Effect                              |
