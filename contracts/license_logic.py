@@ -1,4 +1,4 @@
-# v0.3.0 — v8 License Marketplace
+# v0.4.0 — v9 Watchtower (community bounty + watchlist + on-chain takedown)
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 import contextlib
 import hashlib
@@ -98,6 +98,15 @@ MAX_TIERS_PER_WORK = 8
 MAX_COAUTHORS_PER_WORK = 4
 BPS_TOTAL = 10000
 DEFAULT_TIER_NAME = "default"
+
+# v9 — Watchtower constants.
+MAX_WATCHLIST_PER_WORK = 20
+MAX_BOUNTY_CONTRIBUTORS = 50
+WATCHLIST_BOOST_NUM = 2  # watchlist-hit bounty share multiplier (numerator)
+WATCHLIST_BOOST_DEN = 1  # (denominator) — effective 2× on watchlist matches
+# Grace window (in write epochs) that must pass AFTER the INFRINGEMENT verdict
+# before a takedown notice can be issued. Keeps a live appeal safe.
+TAKEDOWN_APPEAL_GRACE_EPOCHS = 25
 
 
 ANCHOR_PRINCIPLE = (
@@ -426,6 +435,22 @@ class Contract(gl.Contract):
     coauthors_count: TreeMap[str, u256]          # key: work_id
     coauthor_addr: TreeMap[str, str]             # key: f"{work_id}:{idx}"
     coauthor_bps: TreeMap[str, u256]
+    # v9 — Community bounty contributors (permissionless funding).
+    bounty_contributor_count: TreeMap[str, u256]              # key: work_id
+    bounty_contributor_addr: TreeMap[str, str]                # key: f"{work_id}:{idx}"
+    bounty_contributor_amount: TreeMap[str, u256]             # key: f"{work_id}:{idx}"
+    bounty_contributor_index_by_addr: TreeMap[str, u256]      # key: f"{work_id}:{addr}" (idx+1; 0 = not found)
+    # v9 — Suspect watchlist (owner-curated URLs; scanners get 2x bounty share).
+    watchlist_count: TreeMap[str, u256]                       # key: work_id
+    watchlist_url: TreeMap[str, str]                          # key: f"{work_id}:{idx}"
+    watchlist_canonical: TreeMap[str, str]                    # key: f"{work_id}:{idx}"
+    watchlist_active: TreeMap[str, bool]                      # key: f"{work_id}:{idx}"
+    watchlist_index_by_canonical: TreeMap[str, u256]          # key: f"{work_id}:{canonical}" (idx+1)
+    # v9 — On-chain takedown notice registry (keyed by verdict_key).
+    takedown_notice: TreeMap[str, str]                        # verdict_key -> notice JSON
+    takedown_issued_at: TreeMap[str, u256]                    # verdict_key -> epoch
+    # v9 — epoch at which a verdict was written (used for takedown grace).
+    verdict_epoch: TreeMap[str, u256]                         # verdict_key -> epoch
 
     admin: Address
     work_counter: u256
@@ -1088,6 +1113,18 @@ class Contract(gl.Contract):
         suspect_hash = deterministic_hash(canonical_suspect)
         verdict_key = f"{work_id}:{suspect_hash}"
         already_credited = self.scan_credited.get(verdict_key, False)
+        # v9 — is this URL on the owner's suspect watchlist?
+        wl_idx_raw = int(
+            self.watchlist_index_by_canonical.get(
+                f"{work_id}:{canonical_suspect}", u256(0)
+            )
+        )
+        on_watchlist = False
+        if wl_idx_raw > 0:
+            wl_idx = wl_idx_raw - 1
+            on_watchlist = bool(
+                self.watchlist_active.get(f"{work_id}:{wl_idx}", False)
+            )
 
         verdict_record = json.dumps(
             {
@@ -1102,10 +1139,13 @@ class Contract(gl.Contract):
                 "injection_attempt": injection_attempt,
                 "already_credited": already_credited,
                 "registered_url_shortcut": is_registered_url_shortcut,
+                "on_watchlist": on_watchlist,
             },
             sort_keys=True,
         )
         self.last_verdict[verdict_key] = verdict_record
+        # v9 — stamp the epoch at which this verdict landed, for takedown grace.
+        self.verdict_epoch[verdict_key] = self.epoch
 
         if (
             verdict_str == "INFRINGEMENT"
@@ -1129,6 +1169,10 @@ class Contract(gl.Contract):
                     tier = reputation_tier(honest, overturned)
                     pct = TIER_BOUNTY_PCT[tier]
                     payout = max(1, int(bounty_pool) * pct // 100)
+                    # v9 — 2x payout when the suspect URL is on the owner's watchlist,
+                    # bounded by the remaining pool.
+                    if on_watchlist:
+                        payout = payout * WATCHLIST_BOOST_NUM // WATCHLIST_BOOST_DEN
                     payout = min(payout, int(bounty_pool))
                     self.infringement_bounty[work_id] = checked_sub(bounty_pool, payout)
                     self._credit_address(scanner_addr, u256(payout))
@@ -1400,6 +1444,208 @@ class Contract(gl.Contract):
             sort_keys=True,
         )
 
+    # ─────────────────────────────────────────────────────────────
+    # v9 — Watchtower: community bounty + suspect watchlist + takedown
+    # ─────────────────────────────────────────────────────────────
+
+    @gl.public.write.payable
+    def fund_bounty(self, work_id: str) -> u256:
+        """v9 — permissionless bounty funding. Anyone (including the owner)
+        can top up a work's bounty pool. Contributor identity + running total
+        are recorded on-chain so anyone can audit who backed a work.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        self._require_work_owner(work_id)
+        if int(gl.message.value) <= 0:
+            raise gl.vm.UserError("Contribution must be greater than 0")
+
+        current = self.infringement_bounty.get(work_id, u256(0))
+        self.total_received = checked_add(self.total_received, int(gl.message.value))
+        self.infringement_bounty[work_id] = checked_add(current, int(gl.message.value))
+
+        sender_str = str(gl.message.sender_address)
+        idx_key = f"{work_id}:{sender_str}"
+        existing_idx_raw = int(
+            self.bounty_contributor_index_by_addr.get(idx_key, u256(0))
+        )
+        if existing_idx_raw > 0:
+            idx = existing_idx_raw - 1
+            entry_key = f"{work_id}:{idx}"
+            prior = self.bounty_contributor_amount.get(entry_key, u256(0))
+            self.bounty_contributor_amount[entry_key] = checked_add(
+                prior, int(gl.message.value)
+            )
+        else:
+            n = int(self.bounty_contributor_count.get(work_id, u256(0)))
+            if n >= MAX_BOUNTY_CONTRIBUTORS:
+                raise gl.vm.UserError(
+                    f"Contributor limit reached (max {MAX_BOUNTY_CONTRIBUTORS})"
+                )
+            entry_key = f"{work_id}:{n}"
+            self.bounty_contributor_addr[entry_key] = sender_str
+            self.bounty_contributor_amount[entry_key] = u256(int(gl.message.value))
+            self.bounty_contributor_index_by_addr[idx_key] = u256(n + 1)
+            self.bounty_contributor_count[work_id] = u256(n + 1)
+
+        return self.infringement_bounty[work_id]
+
+    @gl.public.write
+    def add_watchlist_url(self, work_id: str, suspect_url: str) -> u256:
+        """v9 — owner-only. Add a suspect URL to the watchlist. Scans against
+        canonically-equal URLs earn 2× the tier bounty share (capped at pool).
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can add to the watchlist")
+
+        clean_url = normalise_url(suspect_url)
+        if not is_valid_url(clean_url):
+            raise gl.vm.UserError("suspect_url must be a valid http(s) URL")
+        canonical = canonical_url(clean_url)
+
+        # Reject exact-canonical duplicates.
+        dup_raw = int(
+            self.watchlist_index_by_canonical.get(
+                f"{work_id}:{canonical}", u256(0)
+            )
+        )
+        if dup_raw > 0:
+            raise gl.vm.UserError(
+                f"Watchlist already has this canonical URL at idx {dup_raw - 1}"
+            )
+
+        n = int(self.watchlist_count.get(work_id, u256(0)))
+        if n >= MAX_WATCHLIST_PER_WORK:
+            raise gl.vm.UserError(
+                f"Watchlist limit reached (max {MAX_WATCHLIST_PER_WORK})"
+            )
+        entry_key = f"{work_id}:{n}"
+        self.watchlist_url[entry_key] = clean_url
+        self.watchlist_canonical[entry_key] = canonical
+        self.watchlist_active[entry_key] = True
+        self.watchlist_index_by_canonical[f"{work_id}:{canonical}"] = u256(n + 1)
+        self.watchlist_count[work_id] = u256(n + 1)
+        return u256(n)
+
+    @gl.public.write
+    def set_watchlist_active(
+        self, work_id: str, watch_idx: u256, active: bool
+    ) -> bool:
+        """v9 — owner-only. Soft-toggle a watchlist entry without renumbering
+        the index array (keeps historic evidence keys stable).
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can toggle watchlist")
+        n = int(self.watchlist_count.get(work_id, u256(0)))
+        idx = int(watch_idx)
+        if idx < 0 or idx >= n:
+            raise gl.vm.UserError(f"Invalid watchlist idx {idx}, have {n} entries")
+        self.watchlist_active[f"{work_id}:{idx}"] = active
+        return active
+
+    @gl.public.write
+    def issue_takedown_notice(self, work_id: str, suspect_url: str) -> str:
+        """v9 — anyone can issue a takedown notice AFTER an INFRINGEMENT
+        verdict has survived the appeal grace window. The contract stores an
+        immutable, structured evidence bundle keyed by the same verdict_key
+        so a downstream lawyer / platform can prove the chain of custody.
+
+        Guards:
+          - verdict must exist AND be INFRINGEMENT
+          - a pending appeal blocks the notice
+          - a resolved OVERTURNED appeal blocks the notice
+          - epoch must be >= verdict_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS
+          - re-issue is idempotent (returns the existing notice)
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        self._require_work_owner(work_id)
+
+        clean_suspect_url = normalise_url(suspect_url)
+        canonical_suspect = canonical_url(clean_suspect_url)
+        suspect_hash = deterministic_hash(canonical_suspect)
+        verdict_key = f"{work_id}:{suspect_hash}"
+
+        existing = self.takedown_notice.get(verdict_key, "")
+        if existing:
+            return existing
+
+        record_raw = self.last_verdict.get(verdict_key, "")
+        if not record_raw:
+            raise gl.vm.UserError("No verdict on this URL")
+        try:
+            verdict_obj = json.loads(record_raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise gl.vm.UserError("Verdict record unparseable") from exc
+        if str(verdict_obj.get("verdict", "")).upper() != "INFRINGEMENT":
+            raise gl.vm.UserError(
+                "Takedown notice requires INFRINGEMENT verdict"
+            )
+        if bool(verdict_obj.get("fetch_failed", False)):
+            raise gl.vm.UserError(
+                "Cannot issue takedown from a fetch-failed verdict"
+            )
+
+        appeal_state = self.appeal_state.get(verdict_key, "")
+        if appeal_state == APPEAL_PENDING:
+            raise gl.vm.UserError("Appeal pending — takedown blocked")
+        if appeal_state == APPEAL_OVERTURNED:
+            raise gl.vm.UserError("Verdict was overturned — no takedown")
+
+        v_epoch = int(self.verdict_epoch.get(verdict_key, u256(0)))
+        current = int(self.epoch)
+        if v_epoch == 0:
+            # Historic verdict before v9 — accept immediately.
+            grace_ok = True
+        else:
+            grace_ok = current >= v_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS
+        if not grace_ok:
+            need = v_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS - current
+            raise gl.vm.UserError(
+                f"Appeal grace window not passed — {need} more epoch(s) required"
+            )
+
+        anchor_summary = self._load_anchor_summary(work_id)
+        owner = self.owners.get(work_id, ZERO_ADDR)
+        work_url = self.work_url.get(work_id, "")
+        similarity = int(verdict_obj.get("similarity", 0))
+        matched = str(verdict_obj.get("matched_elements", ""))
+        perspectives = verdict_obj.get("perspectives", {}) or {}
+        appeal_uphold = appeal_state == APPEAL_UPHELD
+
+        notice = json.dumps(
+            {
+                "notice_version": "1.0",
+                "work_id": work_id,
+                "owner": str(owner),
+                "work_url": work_url,
+                "anchor_summary": anchor_summary,
+                "suspect_url": str(verdict_obj.get("suspect_url", clean_suspect_url)),
+                "canonical_url": canonical_suspect,
+                "verdict_key": verdict_key,
+                "verdict": "INFRINGEMENT",
+                "similarity": similarity,
+                "matched_elements": matched,
+                "perspectives": perspectives,
+                "on_watchlist": bool(verdict_obj.get("on_watchlist", False)),
+                "verdict_epoch": v_epoch,
+                "issued_at_epoch": current,
+                "appeal_state": appeal_state or "none",
+                "appeal_uphold": appeal_uphold,
+                "issuer": str(gl.message.sender_address),
+            },
+            sort_keys=True,
+        )
+        self.takedown_notice[verdict_key] = notice
+        self.takedown_issued_at[verdict_key] = u256(current)
+        return notice
+
     @gl.public.write
     def withdraw(self) -> u256:
         self._tick_epoch()
@@ -1509,6 +1755,124 @@ class Contract(gl.Contract):
         return self.epoch
 
     @gl.public.view
+    def list_bounty_contributors(self, work_id: str) -> str:
+        """v9 — public list of everyone who has funded this work's bounty."""
+        n = int(self.bounty_contributor_count.get(work_id, u256(0)))
+        contribs = []
+        total = 0
+        for i in range(n):
+            key = f"{work_id}:{i}"
+            addr_str = self.bounty_contributor_addr.get(key, "")
+            amount = int(self.bounty_contributor_amount.get(key, u256(0)))
+            if not addr_str:
+                continue
+            contribs.append({"address": addr_str, "amount": amount})
+            total += amount
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "count": len(contribs),
+                "total_contributed": total,
+                "current_pool": int(self.infringement_bounty.get(work_id, u256(0))),
+                "contributors": contribs,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def list_watchlist(self, work_id: str) -> str:
+        """v9 — public suspect watchlist. Scanners get 2× bounty on hits."""
+        n = int(self.watchlist_count.get(work_id, u256(0)))
+        entries = []
+        for i in range(n):
+            key = f"{work_id}:{i}"
+            entries.append(
+                {
+                    "idx": i,
+                    "suspect_url": self.watchlist_url.get(key, ""),
+                    "canonical_url": self.watchlist_canonical.get(key, ""),
+                    "active": self.watchlist_active.get(key, False),
+                }
+            )
+        return json.dumps(
+            {"work_id": work_id, "count": n, "entries": entries},
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def is_on_watchlist(self, work_id: str, suspect_url: str) -> bool:
+        canonical = canonical_url(normalise_url(suspect_url))
+        raw = int(
+            self.watchlist_index_by_canonical.get(
+                f"{work_id}:{canonical}", u256(0)
+            )
+        )
+        if raw == 0:
+            return False
+        idx = raw - 1
+        return bool(self.watchlist_active.get(f"{work_id}:{idx}", False))
+
+    @gl.public.view
+    def get_takedown_notice(self, work_id: str, suspect_url: str) -> str:
+        canonical = canonical_url(normalise_url(suspect_url))
+        verdict_key = f"{work_id}:{deterministic_hash(canonical)}"
+        notice = self.takedown_notice.get(verdict_key, "")
+        if not notice:
+            return json.dumps(
+                {"issued": False, "verdict_key": verdict_key},
+                sort_keys=True,
+            )
+        return notice
+
+    @gl.public.view
+    def takedown_ready(self, work_id: str, suspect_url: str) -> str:
+        """v9 — dry-run check: can issue_takedown_notice be called now?"""
+        canonical = canonical_url(normalise_url(suspect_url))
+        verdict_key = f"{work_id}:{deterministic_hash(canonical)}"
+        existing = self.takedown_notice.get(verdict_key, "")
+        already = bool(existing)
+        record = self.last_verdict.get(verdict_key, "")
+        reason = ""
+        ready = False
+        v_epoch = int(self.verdict_epoch.get(verdict_key, u256(0)))
+        current = int(self.epoch)
+        needed_at = 0 if v_epoch == 0 else v_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS
+        if already:
+            reason = "already_issued"
+        elif not record:
+            reason = "no_verdict"
+        else:
+            try:
+                obj = json.loads(record)
+            except (json.JSONDecodeError, TypeError):
+                obj = {}
+            if str(obj.get("verdict", "")).upper() != "INFRINGEMENT":
+                reason = "not_infringement"
+            elif bool(obj.get("fetch_failed", False)):
+                reason = "fetch_failed"
+            elif self.appeal_state.get(verdict_key, "") == APPEAL_PENDING:
+                reason = "appeal_pending"
+            elif self.appeal_state.get(verdict_key, "") == APPEAL_OVERTURNED:
+                reason = "appeal_overturned"
+            elif v_epoch > 0 and current < needed_at:
+                reason = "grace_window"
+            else:
+                ready = True
+                reason = "ready"
+        return json.dumps(
+            {
+                "ready": ready,
+                "reason": reason,
+                "already_issued": already,
+                "verdict_epoch": v_epoch,
+                "current_epoch": current,
+                "eligible_at_epoch": needed_at,
+                "verdict_key": verdict_key,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.view
     def get_withdrawable(self, addr: str) -> u256:
         try:
             address = Address(addr)
@@ -1560,6 +1924,10 @@ class Contract(gl.Contract):
                 "anchor_summary": anchor_summary,
                 "tiers_count": int(self.license_tiers_count.get(work_id, u256(0))),
                 "coauthors_count": int(self.coauthors_count.get(work_id, u256(0))),
+                "watchlist_count": int(self.watchlist_count.get(work_id, u256(0))),
+                "bounty_contributor_count": int(
+                    self.bounty_contributor_count.get(work_id, u256(0))
+                ),
             },
             sort_keys=True,
         )
