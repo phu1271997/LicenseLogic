@@ -26,6 +26,32 @@ interface WorkInfo {
   anchored?: boolean;
   anchor_summary?: string;
   scans_disabled?: boolean;
+  tiers_count?: number;
+  coauthors_count?: number;
+}
+
+// v8 — License Marketplace
+interface LicenseTier {
+  idx: number;
+  name: string;
+  price: number;
+  duration_epochs: number;
+  active: boolean;
+}
+
+interface Coauthor {
+  address: string;
+  bps: number;
+  default?: boolean;
+}
+
+interface LicenseView {
+  has_license: boolean;
+  active?: boolean;
+  tier_idx?: number;
+  expires_at?: number;
+  purchased_at?: number;
+  current_epoch?: number;
 }
 
 interface Perspectives {
@@ -149,6 +175,7 @@ function shortAddr(addr: string, head = 6, tail = 4): string {
 const NAV_LINKS = [
   { href: "#how", label: "How it works" },
   { href: "#app", label: "Try the app" },
+  { href: "#marketplace", label: "Marketplace" },
   { href: "#verdicts", label: "Verdicts" },
   { href: "#architecture", label: "Architecture" },
   { href: "#compare", label: "vs Solidity" },
@@ -173,6 +200,20 @@ export default function Home() {
   // License form
   const [licWorkId, setLicWorkId] = useState("");
   const [licValue, setLicValue] = useState("1000");
+  // v8 — tier picker
+  const [licTiers, setLicTiers] = useState<LicenseTier[] | null>(null);
+  const [licTierIdx, setLicTierIdx] = useState<number>(0);
+  const [licenseView, setLicenseView] = useState<LicenseView | null>(null);
+  const [currentEpoch, setCurrentEpoch] = useState<number | null>(null);
+  // v8 — Manage panel (owner-only, in View tab)
+  const [viewTiers, setViewTiers] = useState<LicenseTier[] | null>(null);
+  const [viewCoauthors, setViewCoauthors] = useState<Coauthor[] | null>(null);
+  const [newTierName, setNewTierName] = useState("");
+  const [newTierPrice, setNewTierPrice] = useState("500");
+  const [newTierDuration, setNewTierDuration] = useState("100");
+  const [coauthorRows, setCoauthorRows] = useState<
+    { addr: string; bps: string }[]
+  >([]);
 
   // Scan form
   const [scanWorkId, setScanWorkId] = useState("");
@@ -332,12 +373,30 @@ export default function Home() {
     setLoadingStep("Submitting license purchase…");
     try {
       const workId = normaliseWorkId(licWorkId);
+      // v8 — if tiers loaded and the user picked one, use tiered flow so
+      // duration + royalty splits apply. Otherwise fall back to legacy.
+      const useTier = !!licTiers && licTiers.length > 0;
       setLoadingStep("Waiting for consensus (Accepted)…");
-      const { hash, wait } = await writeContract(
-        "purchase_license",
-        [workId],
-        BigInt(licValue || "0")
-      );
+      const { hash, wait } = useTier
+        ? await writeContract(
+            "purchase_license_tier",
+            [workId, licTierIdx],
+            BigInt(licValue || "0")
+          )
+        : await writeContract(
+            "purchase_license",
+            [workId],
+            BigInt(licValue || "0")
+          );
+      // Refresh license view after purchase.
+      try {
+        const raw = await readContract("get_license", [workId, BURNER_ADDRESS]);
+        const parsed: LicenseView =
+          typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as LicenseView);
+        setLicenseView(parsed);
+      } catch {
+        setLicenseView(null);
+      }
       setStatus({
         type: wait.timedOut ? "warn" : "success",
         msg: `License purchased for ${workId} (${describeWait(wait)})`,
@@ -347,6 +406,161 @@ export default function Home() {
       setStatus({
         type: "error",
         msg: `License purchase failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  // v8 — load tiers + burner's license status for the License tab.
+  const loadLicenseInfo = useCallback(async (rawWorkId: string) => {
+    const workId = normaliseWorkId(rawWorkId);
+    if (!workId) return;
+    try {
+      const rawT = await readContract("list_license_tiers", [workId]);
+      const parsedT =
+        typeof rawT === "string"
+          ? JSON.parse(rawT)
+          : (rawT as unknown as { tiers: LicenseTier[] });
+      const tiers = (parsedT.tiers || []) as LicenseTier[];
+      setLicTiers(tiers);
+      if (tiers.length > 0) {
+        const firstActive = tiers.find((t) => t.active) || tiers[0];
+        setLicTierIdx(firstActive.idx);
+        setLicValue(String(firstActive.price));
+      }
+    } catch {
+      setLicTiers(null);
+    }
+    try {
+      const rawL = await readContract("get_license", [workId, BURNER_ADDRESS]);
+      const parsed: LicenseView =
+        typeof rawL === "string" ? JSON.parse(rawL) : (rawL as unknown as LicenseView);
+      setLicenseView(parsed);
+    } catch {
+      setLicenseView(null);
+    }
+    try {
+      const e = await readContract("get_epoch", []);
+      setCurrentEpoch(Number(e));
+    } catch {
+      setCurrentEpoch(null);
+    }
+  }, []);
+
+  // v8 — load tiers + coauthors for a work in the View tab.
+  const loadWorkExtras = useCallback(async (workId: string) => {
+    try {
+      const raw = await readContract("list_license_tiers", [workId]);
+      const parsed =
+        typeof raw === "string"
+          ? JSON.parse(raw)
+          : (raw as unknown as { tiers: LicenseTier[] });
+      setViewTiers(parsed.tiers || []);
+    } catch {
+      setViewTiers(null);
+    }
+    try {
+      const raw = await readContract("get_coauthors", [workId]);
+      const parsed =
+        typeof raw === "string"
+          ? JSON.parse(raw)
+          : (raw as unknown as { coauthors: Coauthor[] });
+      setViewCoauthors(parsed.coauthors || []);
+    } catch {
+      setViewCoauthors(null);
+    }
+  }, []);
+
+  async function handleAddTier(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Adding tier…");
+    try {
+      const price = BigInt(newTierPrice || "0");
+      const dur = BigInt(newTierDuration || "0");
+      const { hash, wait } = await writeContract("add_license_tier", [
+        workId,
+        newTierName || "tier",
+        price,
+        dur,
+      ]);
+      await loadWorkExtras(workId);
+      setNewTierName("");
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Tier added for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Add tier failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleToggleTier(workId: string, tier: LicenseTier) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep(tier.active ? "Deactivating tier…" : "Reactivating tier…");
+    try {
+      const { hash, wait } = await writeContract("set_tier_active", [
+        workId,
+        tier.idx,
+        !tier.active,
+      ]);
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Tier ${tier.idx} ${!tier.active ? "activated" : "deactivated"} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Toggle tier failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleSetCoauthors(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Setting coauthors…");
+    try {
+      const rows = coauthorRows.filter((r) => r.addr.trim() && r.bps.trim());
+      if (rows.length === 0) {
+        throw new Error("Need at least one coauthor row");
+      }
+      const addrs = rows.map((r) => r.addr.trim());
+      const bpsArr = rows.map((r) => Number(r.bps));
+      const total = bpsArr.reduce((a, b) => a + b, 0);
+      if (total !== 10000) {
+        throw new Error(`bps must sum to 10000, got ${total}`);
+      }
+      const { hash, wait } = await writeContract("set_coauthors", [
+        workId,
+        addrs,
+        bpsArr,
+      ]);
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Coauthors set for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Set coauthors failed: ${err instanceof Error ? err.message : String(err)}`,
       });
     } finally {
       setLoading(false);
@@ -549,6 +763,8 @@ export default function Home() {
         }
         setWorkInfo(parsed);
         setStatus({ type: "success", msg: `Loaded ${parsed.work_id}` });
+        // v8 — also load tiers + coauthors for the loaded work.
+        await loadWorkExtras(parsed.work_id);
       }
     } catch (err: unknown) {
       setStatus({
@@ -587,7 +803,7 @@ export default function Home() {
     }
   }
 
-  const usePrefilled = (workId: string, url?: string) => {
+  const prefillScan = (workId: string, url?: string) => {
     setActiveTab("scan");
     setScanWorkId(workId);
     if (url) setScanUrl(url);
@@ -886,20 +1102,102 @@ export default function Home() {
                 <div className="mb-5">
                   <h3 className="text-xl font-bold">Purchase a license</h3>
                   <p className="text-sm text-[color:var(--foreground-muted)] mt-1">
-                    Pay at least the listed price. Success mints a per-address license —
-                    read it back with <code className="font-mono text-xs">has_license</code>.
+                    v8 · pick a tier (perpetual or time-bound in epochs).
+                    Revenue is split by the on-chain co-author basis points.
                   </p>
                 </div>
                 <form onSubmit={handleLicense} className="space-y-4">
                   <Field label="Work ID">
-                    <input
-                      type="text"
-                      placeholder="work_1"
-                      value={licWorkId}
-                      onChange={(e) => setLicWorkId(e.target.value)}
-                      required
-                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="work_1"
+                        value={licWorkId}
+                        onChange={(e) => setLicWorkId(e.target.value)}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => loadLicenseInfo(licWorkId)}
+                        disabled={loading || !licWorkId}
+                        className="gl-btn-ghost px-3 py-2 rounded-lg text-xs whitespace-nowrap"
+                      >
+                        Load tiers
+                      </button>
+                    </div>
                   </Field>
+
+                  {licTiers && licTiers.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-[color:var(--foreground-muted)] mb-2">
+                        Choose a tier{" "}
+                        <span className="gl-chip gl-chip-accent text-[10px]">
+                          v8 · marketplace
+                        </span>
+                      </p>
+                      <div className="space-y-2">
+                        {licTiers.map((t) => (
+                          <label
+                            key={t.idx}
+                            className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                              licTierIdx === t.idx
+                                ? "border-[color:var(--accent)]/60 bg-accent/10"
+                                : "border-card-border hover:bg-white/5"
+                            } ${!t.active ? "opacity-50" : ""}`}
+                          >
+                            <input
+                              type="radio"
+                              name="tier"
+                              value={t.idx}
+                              checked={licTierIdx === t.idx}
+                              disabled={!t.active}
+                              onChange={() => {
+                                setLicTierIdx(t.idx);
+                                setLicValue(String(t.price));
+                              }}
+                              className="mt-1"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <span className="font-semibold text-sm">
+                                  {t.name}{" "}
+                                  <span className="text-[10px] font-mono opacity-60">
+                                    #{t.idx}
+                                  </span>
+                                </span>
+                                <span
+                                  className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                                    t.active
+                                      ? "bg-green-500/10 border-green-500/30 text-green-300"
+                                      : "bg-gray-500/10 border-gray-500/30 text-gray-300"
+                                  }`}
+                                >
+                                  {t.active ? "active" : "inactive"}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 mt-1 text-xs text-[color:var(--foreground-muted)]">
+                                <div>
+                                  price:{" "}
+                                  <span className="font-mono text-[color:var(--foreground)]">
+                                    {t.price} wei
+                                  </span>
+                                </div>
+                                <div>
+                                  duration:{" "}
+                                  <span className="font-mono text-[color:var(--foreground)]">
+                                    {t.duration_epochs === 0
+                                      ? "perpetual"
+                                      : `${t.duration_epochs} epochs`}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <Field label="Payment amount (wei)">
                     <input
                       type="number"
@@ -909,10 +1207,73 @@ export default function Home() {
                       min="0"
                     />
                   </Field>
-                  <button type="submit" disabled={loading} className="w-full gl-btn-primary py-3 rounded-xl font-semibold text-sm">
-                    {loading ? "Processing…" : "Purchase license"}
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full gl-btn-primary py-3 rounded-xl font-semibold text-sm"
+                  >
+                    {loading
+                      ? "Processing…"
+                      : licTiers && licTiers.length > 0
+                        ? `Buy tier ${licTierIdx}`
+                        : "Purchase license"}
                   </button>
                 </form>
+
+                {licenseView && licenseView.has_license && (
+                  <div className="mt-4 p-4 gl-card rounded-xl space-y-1 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[color:var(--foreground-muted)]">
+                        Your license
+                      </span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                          licenseView.active
+                            ? "bg-green-500/10 border-green-500/30 text-green-300"
+                            : "bg-red-500/10 border-red-500/30 text-red-300"
+                        }`}
+                      >
+                        {licenseView.active ? "active" : "expired"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-[color:var(--foreground-muted)]">
+                          tier:
+                        </span>{" "}
+                        <span className="font-mono">
+                          #{licenseView.tier_idx ?? 0}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[color:var(--foreground-muted)]">
+                          expires at epoch:
+                        </span>{" "}
+                        <span className="font-mono">
+                          {licenseView.expires_at === 0
+                            ? "never"
+                            : licenseView.expires_at}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[color:var(--foreground-muted)]">
+                          purchased at epoch:
+                        </span>{" "}
+                        <span className="font-mono">
+                          {licenseView.purchased_at ?? "-"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[color:var(--foreground-muted)]">
+                          current epoch:
+                        </span>{" "}
+                        <span className="font-mono">
+                          {currentEpoch ?? licenseView.current_epoch ?? "-"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1141,6 +1502,45 @@ export default function Home() {
                         </p>
                       )}
                     </div>
+
+                    {/* v8 — License tiers panel */}
+                    {viewTiers && (
+                      <TiersPanel
+                        workId={workInfo.work_id}
+                        tiers={viewTiers}
+                        isOwner={
+                          !!workInfo.owner &&
+                          workInfo.owner.toLowerCase() ===
+                            BURNER_ADDRESS.toLowerCase()
+                        }
+                        loading={loading}
+                        newTierName={newTierName}
+                        newTierPrice={newTierPrice}
+                        newTierDuration={newTierDuration}
+                        onNameChange={setNewTierName}
+                        onPriceChange={setNewTierPrice}
+                        onDurationChange={setNewTierDuration}
+                        onAddTier={() => handleAddTier(workInfo.work_id)}
+                        onToggleTier={(t) => handleToggleTier(workInfo.work_id, t)}
+                      />
+                    )}
+
+                    {/* v8 — Co-author royalty splits */}
+                    {viewCoauthors && (
+                      <CoauthorsPanel
+                        workId={workInfo.work_id}
+                        coauthors={viewCoauthors}
+                        isOwner={
+                          !!workInfo.owner &&
+                          workInfo.owner.toLowerCase() ===
+                            BURNER_ADDRESS.toLowerCase()
+                        }
+                        loading={loading}
+                        rows={coauthorRows}
+                        onRowsChange={setCoauthorRows}
+                        onSubmit={() => handleSetCoauthors(workInfo.work_id)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -1244,7 +1644,7 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() =>
-                                usePrefilled(w.work_id, "https://example.com/")
+                                prefillScan(w.work_id, "https://example.com/")
                               }
                               className="gl-btn-ghost px-3 py-1 text-[11px] rounded-lg"
                             >
@@ -1260,6 +1660,32 @@ export default function Home() {
             )}
           </div>
         </section>
+
+        {/* ─── v8 · License Marketplace ─── */}
+        <SectionShell
+          id="marketplace"
+          eyebrow="v8 · License Marketplace"
+          title="Multi-tier offers, time-bound licenses, on-chain royalty splits."
+        >
+          <div className="grid md:grid-cols-3 gap-4">
+            <MarketCard
+              title="Multi-tier offers"
+              body="Every work ships with a default perpetual tier. Owners add up to 8 tiers — personal / commercial / exclusive — each with its own price and duration in write epochs. Buyers pick the tier at purchase; the on-chain license record remembers which one."
+              api="add_license_tier(work_id, name, price, duration_epochs)"
+            />
+            <MarketCard
+              title="Time-bound licenses"
+              body="Duration is counted in the global write epoch — a monotonic counter that ticks once per state-changing write. has_license flips false when the epoch overtakes expires_at. Renewals extend the expiry; a perpetual tier overrides to duration 0."
+              api="purchase_license_tier(work_id, tier_idx)"
+              accent
+            />
+            <MarketCard
+              title="Royalty splits"
+              body="Register up to 4 co-authors with basis points summing to 10000. Every license revenue AND every UPHELD appeal stake is split by those bps. Rounding remainder credits the last coauthor — no wei is lost or minted."
+              api="set_coauthors(work_id, [addr...], [bps...])"
+            />
+          </div>
+        </SectionShell>
 
         {/* ─── Verdict examples ─── */}
         <SectionShell
@@ -1323,6 +1749,18 @@ export default function Home() {
             <SignalCard
               name="perspectives (v6)"
               body="Every verdict carries three named lenses — legal / forensic / skeptic. Each is a non-empty sentence. Consensus principle rejects a validator that skipped a lens."
+            />
+            <SignalCard
+              name="license_tiers (v8)"
+              body="Owner defines multi-tier offers — name / price / duration_epochs. purchase_license_tier(work_id, tier_idx) applies the tier's duration; duration 0 = perpetual. Renewals extend the expiry."
+            />
+            <SignalCard
+              name="coauthor_bps (v8)"
+              body="Up to four co-authors per work with basis points summing to 10000. Every license revenue AND every UPHELD appeal-stake credit is split by these bps. Rounding remainder always goes to the last coauthor — no wei lost or minted."
+            />
+            <SignalCard
+              name="epoch (v8)"
+              body="Global monotonic counter ticking once per state-changing write. Time-bound licenses expire when current epoch reaches expires_at. Views never tick the epoch."
             />
           </div>
         </SectionShell>
@@ -1671,6 +2109,32 @@ function ProblemCard({ title, body }: { title: string; body: string }) {
     <div className="gl-card p-5">
       <div className="text-sm font-semibold mb-1.5">{title}</div>
       <p className="text-sm text-[color:var(--foreground-muted)] leading-relaxed">{body}</p>
+    </div>
+  );
+}
+
+function MarketCard({
+  title,
+  body,
+  api,
+  accent,
+}: {
+  title: string;
+  body: string;
+  api: string;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      className={`gl-card p-5 gl-card-hover ${accent ? "border-[color:var(--accent)]/50" : ""}`}
+    >
+      <div className="text-sm font-semibold mb-2">{title}</div>
+      <p className="text-sm text-[color:var(--foreground-muted)] leading-relaxed mb-3">
+        {body}
+      </p>
+      <code className="text-[10px] font-mono block bg-black/30 border border-card-border rounded-md px-2 py-1.5 text-[color:var(--accent-2)] break-all">
+        {api}
+      </code>
     </div>
   );
 }
@@ -2050,6 +2514,276 @@ function AppealPanel({
             Resolution reasoning:
           </p>
           <p className="text-sm">{appeal.resolution_reason || "(no reasoning stored)"}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TiersPanel({
+  workId,
+  tiers,
+  isOwner,
+  loading,
+  newTierName,
+  newTierPrice,
+  newTierDuration,
+  onNameChange,
+  onPriceChange,
+  onDurationChange,
+  onAddTier,
+  onToggleTier,
+}: {
+  workId: string;
+  tiers: LicenseTier[];
+  isOwner: boolean;
+  loading: boolean;
+  newTierName: string;
+  newTierPrice: string;
+  newTierDuration: string;
+  onNameChange: (v: string) => void;
+  onPriceChange: (v: string) => void;
+  onDurationChange: (v: string) => void;
+  onAddTier: () => void;
+  onToggleTier: (t: LicenseTier) => void;
+}) {
+  return (
+    <div className="p-3 gl-card rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          License tiers for <span className="font-mono">{workId}</span>{" "}
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v8 · marketplace
+          </span>
+        </p>
+        <span className="text-[10px] text-[color:var(--foreground-muted)]">
+          {tiers.length} tier(s)
+        </span>
+      </div>
+      {tiers.length === 0 && (
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          No tiers yet. Register a work — a default perpetual tier is auto-created.
+        </p>
+      )}
+      <div className="space-y-2">
+        {tiers.map((t) => (
+          <div
+            key={t.idx}
+            className={`p-2.5 rounded-lg border ${
+              t.active
+                ? "border-card-border bg-white/5"
+                : "border-card-border bg-white/[.02] opacity-70"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <span className="text-sm font-semibold">{t.name}</span>{" "}
+                <span className="text-[10px] font-mono opacity-60">
+                  #{t.idx}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                    t.active
+                      ? "bg-green-500/10 border-green-500/30 text-green-300"
+                      : "bg-gray-500/10 border-gray-500/30 text-gray-300"
+                  }`}
+                >
+                  {t.active ? "active" : "inactive"}
+                </span>
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleTier(t)}
+                    disabled={loading}
+                    className="gl-btn-ghost px-2.5 py-1 text-[10px] rounded-md"
+                  >
+                    {t.active ? "Deactivate" : "Reactivate"}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-1 text-xs text-[color:var(--foreground-muted)]">
+              <div>
+                price:{" "}
+                <span className="font-mono text-[color:var(--foreground)]">
+                  {t.price} wei
+                </span>
+              </div>
+              <div>
+                duration:{" "}
+                <span className="font-mono text-[color:var(--foreground)]">
+                  {t.duration_epochs === 0
+                    ? "perpetual"
+                    : `${t.duration_epochs} epochs`}
+                </span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {isOwner && (
+        <div className="pt-2 border-t border-card-border space-y-2">
+          <p className="text-[11px] text-[color:var(--foreground-muted)]">
+            Add a new tier (owner-only). Duration 0 = perpetual.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <input
+              type="text"
+              placeholder="name (commercial)"
+              value={newTierName}
+              onChange={(e) => onNameChange(e.target.value)}
+              className="col-span-2"
+            />
+            <input
+              type="number"
+              placeholder="price wei"
+              value={newTierPrice}
+              onChange={(e) => onPriceChange(e.target.value)}
+              min="0"
+            />
+            <input
+              type="number"
+              placeholder="duration epochs"
+              value={newTierDuration}
+              onChange={(e) => onDurationChange(e.target.value)}
+              min="0"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onAddTier}
+            disabled={loading || !newTierName}
+            className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold"
+          >
+            Add tier
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoauthorsPanel({
+  workId,
+  coauthors,
+  isOwner,
+  loading,
+  rows,
+  onRowsChange,
+  onSubmit,
+}: {
+  workId: string;
+  coauthors: Coauthor[];
+  isOwner: boolean;
+  loading: boolean;
+  rows: { addr: string; bps: string }[];
+  onRowsChange: (rows: { addr: string; bps: string }[]) => void;
+  onSubmit: () => void;
+}) {
+  const total = rows.reduce((n, r) => n + (Number(r.bps) || 0), 0);
+  return (
+    <div className="p-3 gl-card rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Co-author royalty splits for{" "}
+          <span className="font-mono">{workId}</span>{" "}
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v8 · royalties
+          </span>
+        </p>
+        <span className="text-[10px] text-[color:var(--foreground-muted)]">
+          {coauthors.length} coauthor(s)
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {coauthors.map((c, i) => (
+          <div
+            key={`${c.address}-${i}`}
+            className="flex items-center justify-between gap-2 p-2 rounded-md bg-white/5"
+          >
+            <span className="text-[11px] font-mono break-all">{c.address}</span>
+            <span className="text-xs font-mono whitespace-nowrap">
+              {(c.bps / 100).toFixed(2)}%
+              {c.default && (
+                <span className="ml-2 text-[9px] gl-chip">default</span>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+      {isOwner && (
+        <div className="pt-2 border-t border-card-border space-y-2">
+          <p className="text-[11px] text-[color:var(--foreground-muted)]">
+            Set 1–4 coauthors with basis points that MUST sum to 10000
+            (= 100 %). Splits apply to every license purchase and every UPHELD
+            appeal-stake credit.
+          </p>
+          {rows.map((r, i) => (
+            <div key={i} className="flex gap-2">
+              <input
+                type="text"
+                placeholder="0x… address"
+                value={r.addr}
+                onChange={(e) => {
+                  const next = [...rows];
+                  next[i] = { ...next[i], addr: e.target.value };
+                  onRowsChange(next);
+                }}
+                className="flex-1 font-mono text-xs"
+              />
+              <input
+                type="number"
+                placeholder="bps"
+                value={r.bps}
+                onChange={(e) => {
+                  const next = [...rows];
+                  next[i] = { ...next[i], bps: e.target.value };
+                  onRowsChange(next);
+                }}
+                className="w-24"
+                min="0"
+                max="10000"
+              />
+              <button
+                type="button"
+                onClick={() => onRowsChange(rows.filter((_, j) => j !== i))}
+                className="gl-btn-ghost px-2 py-1 text-[11px] rounded-md"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() =>
+                onRowsChange([...rows, { addr: "", bps: "" }].slice(0, 4))
+              }
+              disabled={rows.length >= 4}
+              className="gl-btn-ghost px-3 py-1.5 text-xs rounded-lg"
+            >
+              + row
+            </button>
+            <span
+              className={`text-[11px] font-mono ${
+                total === 10000
+                  ? "text-green-300"
+                  : "text-[color:var(--foreground-muted)]"
+              }`}
+            >
+              sum: {total} / 10000
+            </span>
+            <button
+              type="button"
+              onClick={onSubmit}
+              disabled={loading || total !== 10000 || rows.length === 0}
+              className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold"
+            >
+              Save coauthors
+            </button>
+          </div>
         </div>
       )}
     </div>
