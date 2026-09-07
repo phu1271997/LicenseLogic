@@ -9,7 +9,7 @@
 //
 // Flags:
 //   --addr=<0x...>      Override the contract address (else uses FALLBACK_ADDRESS).
-//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy|tier|coauthors|buy-tier
+//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy|tier|coauthors|buy-tier|community-bounty|watchlist|scan-watched|takedown
 //                        Run a single stage instead of the full sequence.
 //
 // Outputs:
@@ -209,6 +209,59 @@ async function main() {
     );
     await read("get-license", buyerClient, "get_license", [workId, buyer.address]);
     await read("get-epoch", ownerClient, "get_epoch", []);
+  }
+
+  // v9 — a community backer tops up the pool via fund_bounty (permissionless).
+  if (STEP === "all" || STEP === "community-bounty") {
+    const backerPk = loadOrCreatePk(path.resolve(".seed_backer_pk"));
+    const { account: backer, client: backerClient } = makeClient(backerPk);
+    console.log(`backer:   ${backer.address}`);
+    await write("fund-bounty", backerClient, "fund_bounty", [workId], 3000n);
+    await read(
+      "list-contributors",
+      ownerClient,
+      "list_bounty_contributors",
+      [workId],
+    );
+  }
+
+  // v9 — owner adds a suspect URL to the watchlist.
+  if (STEP === "all" || STEP === "watchlist") {
+    await write(
+      "add-watch",
+      ownerClient,
+      "add_watchlist_url",
+      [workId, "https://example.com/watched-copy"],
+    );
+    await read("list-watchlist", ownerClient, "list_watchlist", [workId]);
+  }
+
+  // v9 — a scanner scans the watchlisted URL. Since example.com is not the
+  // registered URL the LLM verdict decides; this is a real nondet path and
+  // may return CLEAR — that's fine, the point is to exercise the flow.
+  if (STEP === "watched-scan") {
+    await write(
+      "watched-scan",
+      ownerClient,
+      "scan_for_infringement",
+      [workId, "https://example.com/watched-copy"],
+    );
+    await read(
+      "watched-verdict",
+      ownerClient,
+      "get_last_verdict_by_url",
+      [workId, "https://example.com/watched-copy"],
+    );
+  }
+
+  // v9 — probe takedown readiness so reviewers see the state machine.
+  if (STEP === "all" || STEP === "takedown") {
+    await read(
+      "takedown-ready",
+      ownerClient,
+      "takedown_ready",
+      [workId, REG_URL],
+    );
   }
 
   await read("final", ownerClient, "get_work_counter", []);
