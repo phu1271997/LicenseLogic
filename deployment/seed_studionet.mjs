@@ -9,7 +9,7 @@
 //
 // Flags:
 //   --addr=<0x...>      Override the contract address (else uses FALLBACK_ADDRESS).
-//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy
+//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy|tier|coauthors|buy-tier
 //                        Run a single stage instead of the full sequence.
 //
 // Outputs:
@@ -166,6 +166,46 @@ async function main() {
     console.log(`buyer:    ${buyer.address}`);
     await write("buy", buyerClient, "purchase_license", [workId], LICENSE_PRICE);
     await read("buy", buyerClient, "has_license", [workId, buyer.address]);
+  }
+
+  // v8 — add a commercial tier so the frontend has something meaningful to show.
+  if (STEP === "all" || STEP === "tier") {
+    await write("add-tier", ownerClient, "add_license_tier", [
+      workId,
+      "commercial-30d",
+      2000n,
+      30n, // 30 write-epochs expiry
+    ]);
+    await read("list-tiers", ownerClient, "list_license_tiers", [workId]);
+  }
+
+  // v8 — set a demo coauthor split so reviewers can see royalties flowing.
+  if (STEP === "all" || STEP === "coauthors") {
+    const bounty2 = loadOrCreatePk(path.resolve(".seed_coauthor_pk"));
+    const { account: coauthor } = makeClient(bounty2);
+    console.log(`coauthor: ${coauthor.address}`);
+    await write(
+      "set-coauthors",
+      ownerClient,
+      "set_coauthors",
+      [workId, [owner.address, coauthor.address], [7000, 3000]],
+    );
+    await read("get-coauthors", ownerClient, "get_coauthors", [workId]);
+  }
+
+  // v8 — buy the tiered license via the new path so get_license has data.
+  if (STEP === "all" || STEP === "buy-tier") {
+    const buyerPk = loadOrCreatePk(BUYER_PK_FILE);
+    const { account: buyer, client: buyerClient } = makeClient(buyerPk);
+    await write(
+      "buy-tier",
+      buyerClient,
+      "purchase_license_tier",
+      [workId, 1],
+      2000n,
+    );
+    await read("get-license", buyerClient, "get_license", [workId, buyer.address]);
+    await read("get-epoch", ownerClient, "get_epoch", []);
   }
 
   await read("final", ownerClient, "get_work_counter", []);
