@@ -108,6 +108,9 @@ All TreeMaps are keyed by `str` for calldata compatibility (R19 in
 | `tier_name/price/duration_epochs/active` (v8) | `TreeMap[str, ...]` keyed `f"{work_id}:{idx}"` | tier record |
 | `license_tier_idx/expires_at/purchased_at` (v8) | `TreeMap[str, u256]` keyed `f"{work_id}:{addr}"` | per-license metadata |
 | `coauthors_count/coauthor_addr/coauthor_bps` (v8) | `TreeMap[str, ...]` | up-to-4 coauthor royalty splits (bps sum = 10000) |
+| `bounty_contributor_count/addr/amount/index_by_addr` (v9) | `TreeMap[str, ...]` | permissionless bounty contributor registry (up to 50 per work; repeat contributions aggregate) |
+| `watchlist_count/url/canonical/active/index_by_canonical` (v9) | `TreeMap[str, ...]` | owner-curated suspect URLs (up to 20 per work); scanners get 2× bounty share on active-watchlist hits |
+| `takedown_notice/issued_at/verdict_epoch` (v9) | `TreeMap[str, ...]` | on-chain takedown registry keyed by `verdict_key` |
 
 ## Invariants
 - Every write path that mutates u256 uses `checked_add` / `checked_sub`.

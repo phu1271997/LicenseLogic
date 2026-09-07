@@ -190,6 +190,59 @@ guarantees can pick a perpetual (`duration_epochs = 0`) tier; the epoch
 never applies. Duration is documented in the frontend as "epochs
 (= state-changing writes on the contract)" so the semantics are honest.
 
+### T15 — Adversarial bounty funding (v9)
+
+**Attack.** An attacker funds a work's bounty pool via `fund_bounty` in tiny
+increments to spam the `bounty_contributor_addr` array, blocking legit
+contributors above the `MAX_BOUNTY_CONTRIBUTORS = 50` cap.
+
+**Defense.** Repeat contributions from the same address are AGGREGATED into
+the existing slot via `bounty_contributor_index_by_addr` — spam from one
+address never grows the array beyond a single entry. To fill the cap
+someone would need 50 distinct funded addresses, at which point the
+`contributor_count` view still gives owners full audit visibility.
+
+### T16 — Watchlist stuffing / squatting (v9)
+
+**Attack.** Owner watchlists a competitor's canonical URL (e.g. their
+DMCA-registered content) so any scanner targeting it accidentally
+triggers the 2× payout, or watchlists many similar aliases to amplify.
+
+**Defense.** Watchlist entries are stored by canonical URL (via
+`canonical_url()` — http/https, case, `www.`, ports, trailing slash,
+fragment, tracking params all normalized), so alias variants collapse
+to one entry. Duplicates are rejected at insert. The
+`MAX_WATCHLIST_PER_WORK = 20` cap bounds surface area. Boosted payouts
+STILL require the standard consensus path (real LLM verdict of
+INFRINGEMENT — the shortcut path pays no bounty at all), so watchlist
+squatting alone cannot manufacture a false payout.
+
+### T17 — Premature takedown notice (v9)
+
+**Attack.** Owner rushes to issue a takedown notice on an INFRINGEMENT
+verdict before the appeal window closes, denying a legitimate appellant
+their chance to overturn.
+
+**Defense.** `issue_takedown_notice` enforces three guards, in this
+order: (1) verdict must be INFRINGEMENT + not fetch_failed;
+(2) appeal state must NOT be `pending` or `overturned`;
+(3) `epoch >= verdict_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS` (25
+epochs). Historic verdicts written before v9 (verdict_epoch == 0) are
+accepted immediately since they cannot benefit from a window that did
+not exist at scan time. The dry-run view `takedown_ready` returns the
+specific reason so the frontend can explain the wait.
+
+### T18 — Takedown notice tampering / replay (v9)
+
+**Attack.** Reissue the takedown notice hoping to bump `issued_at_epoch`
+or overwrite the recorded evidence bundle.
+
+**Defense.** `issue_takedown_notice` is idempotent — a second call for
+the same `verdict_key` returns the stored notice byte-for-byte and does
+NOT re-stamp `issued_at_epoch`. Nothing in the notice references the
+caller as an authority (`issuer` is metadata only), so a re-issuer can
+never rewrite history.
+
 ### T9 — Studio storage reset
 
 **Attack.** Not an attack — but Studio may reset storage between builds.

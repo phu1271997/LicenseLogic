@@ -107,6 +107,45 @@ amount)`:
 Bounty payouts on scans still go 100 % to the scanner — the split applies
 to owner-side revenue only.
 
+## v9 additions — Watchtower (community bounty · watchlist · takedown)
+
+### Permissionless bounty funding
+`fund_bounty(work_id)` payable — anyone (owner included) tops up the pool.
+Contributor identity + running total per address are stored via
+`bounty_contributor_addr` / `bounty_contributor_amount` (indexed by
+`bounty_contributor_index_by_addr` so repeat contributions aggregate into
+one slot). Cap: `MAX_BOUNTY_CONTRIBUTORS = 50` distinct funders per work.
+
+Legacy `deposit_infringement_bounty` (owner-only) still works and both
+methods share the same underlying `infringement_bounty[work_id]` pool.
+
+### Watchlist bounty multiplier
+`add_watchlist_url(work_id, url)` — owner-only, up to
+`MAX_WATCHLIST_PER_WORK = 20` entries. `set_watchlist_active` soft-toggles
+without renumbering. When `scan_for_infringement` lands INFRINGEMENT on a
+URL whose canonicalized form matches an ACTIVE watchlist entry, the
+scanner's bounty share is multiplied by `WATCHLIST_BOOST_NUM / WATCHLIST_BOOST_DEN
+= 2 / 1` (2×), still capped at the remaining pool. The shortcut path
+(registered-URL match) never pays bounty at all — watchlist boost only
+applies to the real-LLM path.
+
+### On-chain takedown notice
+`issue_takedown_notice(work_id, url)` — anyone can call. Guards:
+- verdict must exist AND be INFRINGEMENT AND NOT `fetch_failed`
+- appeal state must NOT be `pending` or `overturned`
+- current epoch must be ≥ `verdict_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS = 25`
+  (historic pre-v9 verdicts with `verdict_epoch == 0` are accepted)
+- re-issue is idempotent — the same notice is returned byte-for-byte
+
+The notice bundle stores every evidence field a downstream lawyer /
+platform needs: `work_id`, owner, work_url, anchor_summary,
+suspect_url, canonical_url, verdict_key, verdict, similarity,
+matched_elements, perspectives, on_watchlist, verdict_epoch,
+issued_at_epoch, appeal_state, appeal_uphold, issuer. Public view
+`get_takedown_notice(work_id, url)` returns it. `takedown_ready(work_id, url)`
+is a dry-run that tells the frontend WHY a takedown is not yet callable
+(`grace_window`, `appeal_pending`, `appeal_overturned`, etc.).
+
 ## Formulas
 
 | Event                                     | Effect                              |
@@ -115,8 +154,10 @@ to owner-side revenue only.
 | `purchase_license` re-buy (already licensed) | buyer balance += `msg.value` (refunded, no double-license) |
 | `purchase_license_tier` (new tier)        | `_split_credit(work_id, msg.value)`; expires_at = `epoch + duration` (0 = perpetual) |
 | `purchase_license_tier` (renew)           | `_split_credit(work_id, msg.value)`; expires_at extended by `duration` |
-| `deposit_infringement_bounty`             | `bounty_pool[work_id] += msg.value` |
-| First honest INFRINGEMENT (Path B)        | `payout = max(1, bounty_pool // 10)`; scanner balance += payout; pool -= payout |
+| `deposit_infringement_bounty` (owner)     | `bounty_pool[work_id] += msg.value` |
+| `fund_bounty` (v9, anyone)                | `bounty_pool[work_id] += msg.value`; contributor entry created/aggregated |
+| First honest INFRINGEMENT (Path B, off-watchlist) | `payout = max(1, bounty_pool * tier_pct // 100)` capped at pool; scanner balance += payout |
+| First honest INFRINGEMENT on watchlisted URL (v9) | payout above × 2, still capped by remaining pool |
 | Repeat INFRINGEMENT on same canonical URL | no payout (`already_credited=true`) |
 | INFRINGEMENT via URL shortcut (Path A)    | no payout (`registered_url_shortcut=true`) |
 | `withdraw()`                              | drains sender's `withdrawable_balance` |

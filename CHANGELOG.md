@@ -1,5 +1,96 @@
 # CHANGELOG
 
+## 2026-09-14 — Phase 3 Milestone (Watchtower v9)
+
+Contract v9 (redeploy required). Turns the enforcement layer from a
+single owner-funded pool + single-URL scan model into a real
+community-driven watchtower.
+
+### F1 — Permissionless bounty funding
+
+- New storage: `bounty_contributor_count`, `bounty_contributor_addr`,
+  `bounty_contributor_amount`, `bounty_contributor_index_by_addr`. Cap:
+  `MAX_BOUNTY_CONTRIBUTORS = 50` per work.
+- New payable write: `fund_bounty(work_id)` — anyone (owner included)
+  tops up the pool. Repeat contributions from the same address are
+  AGGREGATED into their existing slot (spam-resistant).
+- New view: `list_bounty_contributors(work_id)` — public audit of who
+  backed a work's enforcement.
+- Legacy `deposit_infringement_bounty` (owner-only) still works and
+  shares the same pool storage.
+
+### F2 — Suspect watchlist with 2× bounty multiplier
+
+- New storage: `watchlist_count`, `watchlist_url`,
+  `watchlist_canonical`, `watchlist_active`,
+  `watchlist_index_by_canonical`. Cap: `MAX_WATCHLIST_PER_WORK = 20`.
+- New owner-only writes: `add_watchlist_url(work_id, url)` (rejects
+  canonical duplicates), `set_watchlist_active(work_id, idx, bool)`
+  (soft-toggle — never renumbers indices so historic evidence keys
+  stay stable).
+- New views: `list_watchlist(work_id)`,
+  `is_on_watchlist(work_id, url)`.
+- `scan_for_infringement` now emits `on_watchlist` on every verdict
+  record. When an INFRINGEMENT lands on an active watchlist entry, the
+  scanner's bounty share is multiplied by
+  `WATCHLIST_BOOST_NUM / WATCHLIST_BOOST_DEN = 2 / 1`, still capped at
+  the remaining pool. The shortcut path never pays bounty (unchanged),
+  so watchlist boost only applies to the real-LLM path.
+
+### F3 — On-chain takedown notice registry
+
+- New storage: `takedown_notice`, `takedown_issued_at`,
+  `verdict_epoch`. `scan_for_infringement` now stamps
+  `verdict_epoch[verdict_key] = self.epoch` for every verdict.
+- New write: `issue_takedown_notice(work_id, url)` — anyone can call.
+  Guards: INFRINGEMENT verdict + not fetch_failed + no pending/
+  overturned appeal + `epoch >= verdict_epoch + TAKEDOWN_APPEAL_GRACE_EPOCHS`
+  (25 epochs; pre-v9 verdicts with epoch 0 are accepted immediately).
+  Idempotent — repeat calls return the stored notice byte-for-byte.
+- New views: `get_takedown_notice(work_id, url)`,
+  `takedown_ready(work_id, url)` (dry-run with the specific
+  ineligibility reason).
+- Notice bundle stores every evidence field a downstream lawyer /
+  platform needs — anchor summary, verdict, similarity, perspectives,
+  canonical URL, appeal state, issuer, timestamps in epochs.
+
+### Frontend
+
+- View tab: two new panels — `BountyPanel` (public contributor list +
+  Fund Bounty button anyone can press) and `WatchlistPanel` (list all
+  entries; owner-only Add + Deactivate/Reactivate controls).
+- Scan tab: verdict panel gains a `TakedownPanel` that shows the
+  dry-run state, explains the grace window countdown, and — once
+  eligible — offers a one-click "Issue takedown notice" button. If a
+  notice already exists it renders the on-chain evidence bundle
+  directly.
+- Landing page: new `#watchtower` section with three cards, three new
+  signal cards (`on_watchlist`, `bounty contributor list`, `takedown
+  notice`). Nav gets a Watchtower link.
+
+### Tests
+
+- New `tests/test_watchtower.py` — 17 cases across three suites:
+  fund_bounty (anyone-can-fund, repeat-aggregation, reject-zero,
+  missing-work), watchlist (owner-only, canonical dedupe, soft-toggle,
+  20-entry limit, 2× boost matches expected math on-chain, off-list
+  scan gets baseline share), takedown notice (rejects missing verdict,
+  respects grace window, blocks on pending / overturned appeal,
+  succeeds after grace + stores full bundle, idempotent re-issue).
+- Fast suite: **106 → 123 pass** (1 skipped, 7 deselected).
+
+### Docs
+
+- `SECURITY.md` — four new threats: T15 adversarial bounty funding
+  (aggregate-per-address defense), T16 watchlist stuffing / squatting
+  (canonical dedupe + real-LLM verdict still required for payout),
+  T17 premature takedown notice (grace window + appeal-state guard),
+  T18 takedown notice tampering / replay (idempotent by design).
+- `ECONOMICS.md` — new "v9 additions" section covering permissionless
+  bounty, watchlist multiplier, takedown notice mechanics. Formulas
+  table extended to distinguish off-watchlist vs on-watchlist payouts.
+- `ARCHITECTURE.md` — storage-model table extended with v9 entries.
+
 ## 2026-09-07 — Phase 3 Milestone (License Marketplace v8)
 
 Contract v8 (redeploy required). Turns the single flat `license_price`
