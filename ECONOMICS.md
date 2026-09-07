@@ -63,12 +63,58 @@ The old flat 10 % of pool per honest INFRINGEMENT now scales with tier:
 Only real LLM-path INFRINGEMENT counts toward `honest_scans`. URL
 shortcuts are deterministic and don't prove judgment.
 
+## v8 additions — License Marketplace (multi-tier, expiry, royalty splits)
+
+### Multi-tier license offers
+Every registered work ships with a `tier_0` = `{name: "default", price: license_price, duration_epochs: 0, active: true}`
+auto-created by `register_work`. Owners can add up to `MAX_TIERS_PER_WORK = 8`
+extra tiers via `add_license_tier(work_id, name, price, duration_epochs)`
+and deactivate any tier with `set_tier_active(work_id, idx, false)`.
+
+- `purchase_license_tier(work_id, tier_idx)` — payable. Reverts if the tier
+  is inactive or if `msg.value < tier_price`. On first purchase, creates
+  `licensees[key]` and stamps `license_tier_idx`, `license_purchased_at`,
+  `license_expires_at`. On repeat purchase, extends the expiry by the tier's
+  `duration_epochs` (a perpetual tier — duration 0 — overrides any prior
+  expiry back to perpetual).
+- Legacy `purchase_license(work_id)` still works and routes through
+  `tier_0`, preserving the idempotent refund semantics.
+
+### Time-bound license expiry — the write epoch
+`self.epoch: u256` is a monotonic counter that ticks once at the start of
+every `@gl.public.write` method. Views never tick it. A license with
+`duration_epochs = D` bought at epoch `E` expires when `epoch >= E + D`.
+`has_license` returns false past that point; `get_license` returns
+`{has_license: true, active: false, ...}` so the frontend can distinguish
+"never bought" from "bought and expired".
+
+Duration `0` means perpetual — the check short-circuits to true.
+
+### Co-author royalty splits
+`set_coauthors(work_id, [addr, ...], [bps, ...])` — owner-only. Up to
+`MAX_COAUTHORS_PER_WORK = 4` coauthors; the bps list MUST sum to
+`BPS_TOTAL = 10000`. When no coauthors are registered, `_split_credit`
+falls back to primary owner 100 %.
+
+Every credit that would previously go to the owner (license revenue AND
+UPHELD appeal-stake payouts) now flows through `_split_credit(work_id,
+amount)`:
+
+- All coauthors except the last receive `amount * bps // 10000`.
+- The last coauthor receives the remainder, so `sum(credits) == amount`
+  exactly. No wei is lost or minted.
+
+Bounty payouts on scans still go 100 % to the scanner — the split applies
+to owner-side revenue only.
+
 ## Formulas
 
 | Event                                     | Effect                              |
 |-------------------------------------------|-------------------------------------|
-| `purchase_license` first time             | owner balance += `msg.value`        |
+| `purchase_license` first time             | tier_0 routed via `_split_credit` → coauthors (or owner if none) `+= msg.value` |
 | `purchase_license` re-buy (already licensed) | buyer balance += `msg.value` (refunded, no double-license) |
+| `purchase_license_tier` (new tier)        | `_split_credit(work_id, msg.value)`; expires_at = `epoch + duration` (0 = perpetual) |
+| `purchase_license_tier` (renew)           | `_split_credit(work_id, msg.value)`; expires_at extended by `duration` |
 | `deposit_infringement_bounty`             | `bounty_pool[work_id] += msg.value` |
 | First honest INFRINGEMENT (Path B)        | `payout = max(1, bounty_pool // 10)`; scanner balance += payout; pool -= payout |
 | Repeat INFRINGEMENT on same canonical URL | no payout (`already_credited=true`) |

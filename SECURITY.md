@@ -152,6 +152,44 @@ which push tier back down. Gold requires ≥ 10 honest **and** zero
 overturns (or ≥ 20 with at most one overturn). One successful appeal
 costs a scanner a tier.
 
+### T12 — Coauthor bps drift / rounding loss (v8)
+
+**Attack.** Register three coauthors with bps 3333 / 3333 / 3334 and pay
+101 wei; naive integer division would credit 33 + 33 + 33 = 99, leaving
+2 wei orphaned inside `total_received` with no owner able to reach it.
+
+**Defense.** `_split_credit` pays all coauthors except the last by
+`amount * bps // 10000` and credits the remainder to the LAST coauthor.
+The invariant is checked in `tests/test_royalty_splits.py::test_split_remainder_goes_to_last_coauthor` — the sum of every
+credited slice equals the input amount exactly; no wei is minted or lost.
+`set_coauthors` rejects rows where bps does not sum to `BPS_TOTAL = 10000`.
+
+### T13 — Inactive-tier purchase resurrection (v8)
+
+**Attack.** Owner deactivates a tier that mispriced against market; a
+buyer replays a stale UI and buys the deactivated tier before the frontend
+refreshes.
+
+**Defense.** `purchase_license_tier` reads `tier_active[work_id:idx]`
+inside the tx and reverts with `"Tier {idx} is inactive"`. The frontend
+disables inactive rows visually AND the contract enforces regardless of
+what the UI sends. Toggling only affects future purchases — existing
+licenses on that tier keep working until their `expires_at` hits.
+
+### T14 — Epoch-expiry manipulation (v8)
+
+**Attack.** Time-bound licenses expire when `epoch >= expires_at`. Because
+epoch ticks once per state-changing write, a malicious owner might try to
+mass-write cheap ops to burn through epochs and expire a paid license
+prematurely.
+
+**Defense.** Every write on the contract costs the sender consensus fees;
+there is no free tick. Views (`get_epoch`, `has_license`, `list_license_tiers`,
+`get_license`) do NOT tick the epoch. A buyer who wants absolute time
+guarantees can pick a perpetual (`duration_epochs = 0`) tier; the epoch
+never applies. Duration is documented in the frontend as "epochs
+(= state-changing writes on the contract)" so the semantics are honest.
+
 ### T9 — Studio storage reset
 
 **Attack.** Not an attack — but Studio may reset storage between builds.

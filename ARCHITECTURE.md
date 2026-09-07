@@ -103,6 +103,11 @@ All TreeMaps are keyed by `str` for calldata compatibility (R19 in
 | `admin`                     | `Address`                  | pause/unpause authority |
 | `work_counter`              | `u256`                     | next work_id |
 | `total_received`            | `u256`                     | economic invariant |
+| `epoch` (v8)                | `u256`                     | monotonic tick per write; drives license expiry |
+| `license_tiers_count` (v8)  | `TreeMap[str, u256]`       | per-work tier count |
+| `tier_name/price/duration_epochs/active` (v8) | `TreeMap[str, ...]` keyed `f"{work_id}:{idx}"` | tier record |
+| `license_tier_idx/expires_at/purchased_at` (v8) | `TreeMap[str, u256]` keyed `f"{work_id}:{addr}"` | per-license metadata |
+| `coauthors_count/coauthor_addr/coauthor_bps` (v8) | `TreeMap[str, ...]` | up-to-4 coauthor royalty splits (bps sum = 10000) |
 
 ## Invariants
 - Every write path that mutates u256 uses `checked_add` / `checked_sub`.

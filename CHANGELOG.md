@@ -1,5 +1,97 @@
 # CHANGELOG
 
+## 2026-09-07 — Phase 3 Milestone (License Marketplace v8)
+
+Contract v8 (redeploy required). Turns the single flat `license_price`
+into a full marketplace with multi-tier offers, time-bound licenses, and
+on-chain co-author royalty splits.
+
+### F1 — Multi-tier license offers
+
+- New storage: `license_tiers_count`, `tier_name`, `tier_price`,
+  `tier_duration_epochs`, `tier_active` (TreeMap-per-index keyed
+  `f"{work_id}:{idx}"`). Max 8 tiers per work.
+- `register_work` now auto-creates `tier_0` from the legacy
+  `license_price` (perpetual, active) so old clients keep working.
+- New writes: `add_license_tier(work_id, name, price, duration_epochs)`,
+  `set_tier_active(work_id, idx, bool)`.
+- New payable write: `purchase_license_tier(work_id, tier_idx)` —
+  reverts on inactive tier or underpayment; extends expiry on renew;
+  perpetual (duration 0) overrides prior expiry.
+- Legacy `purchase_license(work_id)` still works and routes through
+  `tier_0` while preserving idempotent refund semantics.
+
+### F2 — Time-bound license expiry via write-epoch counter
+
+- New storage: `epoch: u256` (global monotonic). `_tick_epoch()` runs at
+  the top of every write; views never tick.
+- New per-license storage: `license_tier_idx`, `license_expires_at`,
+  `license_purchased_at` (keyed `f"{work_id}:{addr}"`).
+- `has_license(work_id, addr)` now returns false once
+  `epoch >= expires_at` (perpetual: `expires_at == 0` short-circuits true).
+- New view: `get_license(work_id, addr)` — full license status
+  (`has_license`, `active`, `tier_idx`, `expires_at`, `purchased_at`,
+  `current_epoch`).
+- New view: `get_epoch()`.
+
+### F3 — Co-author royalty splits
+
+- New storage: `coauthors_count`, `coauthor_addr`, `coauthor_bps`.
+  Max 4 coauthors per work; bps must sum to `BPS_TOTAL = 10000`.
+- New write: `set_coauthors(work_id, [addr, ...], [bps, ...])` —
+  owner-only. Overwrites any prior set.
+- New helper `_split_credit(work_id, amount)` used for every license
+  revenue AND every UPHELD appeal-stake credit. Pays coauthors by bps;
+  remainder always credits the LAST coauthor so `sum(splits) == amount`
+  exactly (invariant: no wei is lost or minted).
+- Bounty payouts on scans still go 100 % to the scanner — the split
+  applies only to owner-side revenue.
+- New view: `get_coauthors(work_id)` — returns default `[owner @ 100%]`
+  when no coauthors registered.
+- New view: `list_license_tiers(work_id)`.
+- `get_work(work_id)` now includes `tiers_count` and `coauthors_count`.
+
+### Frontend
+
+- License tab: tier picker (radio list of tiers with name / price /
+  duration / active). Purchase button routes to `purchase_license_tier`
+  when tiers are loaded, falls back to the legacy call otherwise. Renders
+  the buyer's live `get_license` snapshot after purchase.
+- View tab: two new owner-facing panels — `TiersPanel` (list all tiers,
+  add-tier form, one-click Deactivate / Reactivate) and `CoauthorsPanel`
+  (list current split, up-to-4-row editor that enforces bps sum = 10000
+  client-side).
+- New marketing section `#marketplace` with three cards. Three new
+  signal cards (`license_tiers`, `coauthor_bps`, `epoch`).
+- Fixed a long-standing pre-existing lint error by renaming the local
+  `usePrefilled` helper to `prefillScan` — `use*` prefix was tripping
+  `react-hooks/rules-of-hooks` on every prior CI run.
+
+### Tests
+
+- New `tests/test_license_tiers.py` — 10 cases: default tier seeded on
+  register, owner-only gate on `add_license_tier` / `set_tier_active`,
+  tier append + count, tier purchase happy path (records expiry), revert
+  on inactive tier, revert on underpayment, epoch expiry lapses via
+  unrelated writes, renew extends expiry, perpetual overrides, tier limit
+  enforced.
+- New `tests/test_royalty_splits.py` — 9 cases: default split = owner
+  100 %, owner-only gate, bps sum enforcement, 70/30 split credits
+  proportionally, 33/33/34 remainder → last coauthor (sum-preservation
+  invariant), UPHELD appeal stake splits by bps, max-4 limit, overwrite
+  wipes prior, epoch ticks on writes and NOT on views.
+- Fast suite: **87 → 106 pass** (1 skipped, 7 deselected).
+
+### Docs
+
+- `SECURITY.md` — three new threats: T12 coauthor bps drift / rounding
+  loss (defense: last-coauthor remainder), T13 inactive-tier purchase
+  resurrection (defense: on-chain `tier_active` check), T14 epoch-expiry
+  manipulation (defense: writes cost fees; views never tick; perpetual
+  tier for absolute guarantees).
+- `ECONOMICS.md` — new "v8 additions" section covering multi-tier,
+  epoch-based expiry, royalty split formula. Formulas table extended.
+
 ## 2026-08-31 — Phase 2 Milestones (F1 Appeal Flow · F2 Scanner Reputation)
 
 Contract v7 (redeploy required). Bundles two major features that make the
