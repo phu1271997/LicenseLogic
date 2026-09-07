@@ -54,6 +54,55 @@ interface LicenseView {
   current_epoch?: number;
 }
 
+// v9 — Watchtower
+interface BountyContributor {
+  address: string;
+  amount: number;
+}
+
+interface BountyContribList {
+  count: number;
+  total_contributed: number;
+  current_pool: number;
+  contributors: BountyContributor[];
+}
+
+interface WatchlistEntry {
+  idx: number;
+  suspect_url: string;
+  canonical_url: string;
+  active: boolean;
+}
+
+interface TakedownReady {
+  ready: boolean;
+  reason: string;
+  already_issued: boolean;
+  verdict_epoch: number;
+  current_epoch: number;
+  eligible_at_epoch: number;
+  verdict_key: string;
+}
+
+interface TakedownNotice {
+  notice_version?: string;
+  work_id?: string;
+  suspect_url?: string;
+  canonical_url?: string;
+  verdict?: string;
+  similarity?: number;
+  matched_elements?: string;
+  perspectives?: Perspectives;
+  on_watchlist?: boolean;
+  verdict_epoch?: number;
+  issued_at_epoch?: number;
+  appeal_state?: string;
+  appeal_uphold?: boolean;
+  issuer?: string;
+  anchor_summary?: string;
+  issued?: boolean; // present only on the "no notice yet" wrapper
+}
+
 interface Perspectives {
   legal?: string;
   forensic?: string;
@@ -176,6 +225,7 @@ const NAV_LINKS = [
   { href: "#how", label: "How it works" },
   { href: "#app", label: "Try the app" },
   { href: "#marketplace", label: "Marketplace" },
+  { href: "#watchtower", label: "Watchtower" },
   { href: "#verdicts", label: "Verdicts" },
   { href: "#architecture", label: "Architecture" },
   { href: "#compare", label: "vs Solidity" },
@@ -214,6 +264,19 @@ export default function Home() {
   const [coauthorRows, setCoauthorRows] = useState<
     { addr: string; bps: string }[]
   >([]);
+  // v9 — Watchtower state
+  const [viewBounty, setViewBounty] = useState<BountyContribList | null>(null);
+  const [viewWatchlist, setViewWatchlist] = useState<WatchlistEntry[] | null>(
+    null
+  );
+  const [bountyContribAmount, setBountyContribAmount] = useState<string>("1000");
+  const [newWatchUrl, setNewWatchUrl] = useState<string>("");
+  const [takedownReady, setTakedownReady] = useState<TakedownReady | null>(
+    null
+  );
+  const [takedownNotice, setTakedownNotice] = useState<TakedownNotice | null>(
+    null
+  );
 
   // Scan form
   const [scanWorkId, setScanWorkId] = useState("");
@@ -450,6 +513,7 @@ export default function Home() {
   }, []);
 
   // v8 — load tiers + coauthors for a work in the View tab.
+  // v9 — also load bounty contributors + watchlist.
   const loadWorkExtras = useCallback(async (workId: string) => {
     try {
       const raw = await readContract("list_license_tiers", [workId]);
@@ -471,7 +535,168 @@ export default function Home() {
     } catch {
       setViewCoauthors(null);
     }
+    // v9 — bounty contributors + watchlist
+    try {
+      const raw = await readContract("list_bounty_contributors", [workId]);
+      const parsed: BountyContribList =
+        typeof raw === "string"
+          ? JSON.parse(raw)
+          : (raw as unknown as BountyContribList);
+      setViewBounty(parsed);
+    } catch {
+      setViewBounty(null);
+    }
+    try {
+      const raw = await readContract("list_watchlist", [workId]);
+      const parsed =
+        typeof raw === "string"
+          ? JSON.parse(raw)
+          : (raw as unknown as { entries: WatchlistEntry[] });
+      setViewWatchlist(parsed.entries || []);
+    } catch {
+      setViewWatchlist(null);
+    }
   }, []);
+
+  async function handleFundBounty(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Funding bounty…");
+    try {
+      const wei = BigInt(bountyContribAmount || "0");
+      if (wei <= BigInt(0)) throw new Error("Contribution must be > 0");
+      const { hash, wait } = await writeContract(
+        "fund_bounty",
+        [workId],
+        wei
+      );
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Bounty funded for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Fund bounty failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleAddWatch(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Adding to watchlist…");
+    try {
+      const url = newWatchUrl.trim();
+      if (!url) throw new Error("Enter a URL");
+      const { hash, wait } = await writeContract("add_watchlist_url", [
+        workId,
+        url,
+      ]);
+      await loadWorkExtras(workId);
+      setNewWatchUrl("");
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Watchlist updated for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Watchlist add failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleToggleWatch(
+    workId: string,
+    entry: WatchlistEntry
+  ) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep(entry.active ? "Deactivating watch entry…" : "Reactivating watch entry…");
+    try {
+      const { hash, wait } = await writeContract("set_watchlist_active", [
+        workId,
+        entry.idx,
+        !entry.active,
+      ]);
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Watch entry ${entry.idx} ${!entry.active ? "activated" : "deactivated"} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Watch toggle failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  const refreshTakedown = useCallback(
+    async (workId: string, url: string) => {
+      try {
+        const raw = await readContract("takedown_ready", [workId, url]);
+        const parsed: TakedownReady =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as unknown as TakedownReady);
+        setTakedownReady(parsed);
+      } catch {
+        setTakedownReady(null);
+      }
+      try {
+        const raw = await readContract("get_takedown_notice", [workId, url]);
+        const parsed: TakedownNotice =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as unknown as TakedownNotice);
+        setTakedownNotice(parsed.issued === false ? null : parsed);
+      } catch {
+        setTakedownNotice(null);
+      }
+    },
+    []
+  );
+
+  async function handleIssueTakedown(workId: string, url: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Issuing takedown notice…");
+    try {
+      const { hash, wait } = await writeContract(
+        "issue_takedown_notice",
+        [workId, url]
+      );
+      await refreshTakedown(workId, url);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Takedown notice issued for ${workId} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Takedown failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
 
   async function handleAddTier(workId: string) {
     setLoading(true);
@@ -653,6 +878,8 @@ export default function Home() {
     setStatus(null);
     setVerdictResult(null);
     setAppealView(null);
+    setTakedownReady(null);
+    setTakedownNotice(null);
     setLoadingStep("Submitting scan…");
     try {
       const workId = normaliseWorkId(scanWorkId);
@@ -677,6 +904,8 @@ export default function Home() {
       // v7 — after scan lands, load the appeal view so the panel can offer
       // "Appeal" or "Resolve" buttons where applicable. Silent on old contract.
       await refreshAppealAndRep(workId, scanUrl);
+      // v9 — also load takedown readiness + any existing notice.
+      await refreshTakedown(workId, scanUrl);
       setStatus({
         type: wait.timedOut
           ? "warn"
@@ -1354,6 +1583,11 @@ export default function Home() {
                       handleResolveAppeal(normaliseWorkId(scanWorkId), scanUrl)
                     }
                     loading={loading}
+                    takedownReady={takedownReady}
+                    takedownNotice={takedownNotice}
+                    onIssueTakedown={() =>
+                      handleIssueTakedown(normaliseWorkId(scanWorkId), scanUrl)
+                    }
                   />
                 )}
               </div>
@@ -1525,6 +1759,36 @@ export default function Home() {
                       />
                     )}
 
+                    {/* v9 — Community bounty pool */}
+                    {viewBounty && (
+                      <BountyPanel
+                        workId={workInfo.work_id}
+                        list={viewBounty}
+                        amountWei={bountyContribAmount}
+                        onAmountChange={setBountyContribAmount}
+                        onFund={() => handleFundBounty(workInfo.work_id)}
+                        loading={loading}
+                      />
+                    )}
+
+                    {/* v9 — Suspect watchlist (2x bounty on hits) */}
+                    {viewWatchlist && (
+                      <WatchlistPanel
+                        workId={workInfo.work_id}
+                        entries={viewWatchlist}
+                        isOwner={
+                          !!workInfo.owner &&
+                          workInfo.owner.toLowerCase() ===
+                            BURNER_ADDRESS.toLowerCase()
+                        }
+                        newUrl={newWatchUrl}
+                        onNewUrlChange={setNewWatchUrl}
+                        onAdd={() => handleAddWatch(workInfo.work_id)}
+                        onToggle={(entry) => handleToggleWatch(workInfo.work_id, entry)}
+                        loading={loading}
+                      />
+                    )}
+
                     {/* v8 — Co-author royalty splits */}
                     {viewCoauthors && (
                       <CoauthorsPanel
@@ -1687,6 +1951,32 @@ export default function Home() {
           </div>
         </SectionShell>
 
+        {/* ─── v9 · Watchtower ─── */}
+        <SectionShell
+          id="watchtower"
+          eyebrow="v9 · Watchtower"
+          title="Community-funded bounty, owner-curated watchlist, on-chain takedown notices."
+        >
+          <div className="grid md:grid-cols-3 gap-4">
+            <MarketCard
+              title="Permissionless bounty"
+              body="Anyone can fund any work's bounty pool — not just the owner. Every contribution is written on-chain by address so contributors are auditable. Popular works get community-backed enforcement."
+              api="fund_bounty(work_id)"
+            />
+            <MarketCard
+              title="Suspect watchlist"
+              body="Owners post up to 20 suspect URLs per work. When a scanner hits a watchlisted URL and consensus lands on INFRINGEMENT, the scanner receives 2× the tier bounty share — capped by the remaining pool. Makes the watchlist economically meaningful."
+              api="add_watchlist_url(work_id, url)"
+              accent
+            />
+            <MarketCard
+              title="On-chain takedown notice"
+              body="After the INFRINGEMENT verdict survives an appeal grace window, anyone can issue a structured takedown notice. The contract stamps the full evidence bundle — anchor summary, verdict, similarity, perspectives, canonical URL, appeal state — as an immutable public record for lawyers or platforms."
+              api="issue_takedown_notice(work_id, url)"
+            />
+          </div>
+        </SectionShell>
+
         {/* ─── Verdict examples ─── */}
         <SectionShell
           id="verdicts"
@@ -1761,6 +2051,18 @@ export default function Home() {
             <SignalCard
               name="epoch (v8)"
               body="Global monotonic counter ticking once per state-changing write. Time-bound licenses expire when current epoch reaches expires_at. Views never tick the epoch."
+            />
+            <SignalCard
+              name="on_watchlist (v9)"
+              body="Every verdict record carries a boolean. When true, the scan's canonical URL is on the owner's watchlist AND the entry is active — the scanner earned 2× the tier bounty share, capped by the remaining pool."
+            />
+            <SignalCard
+              name="bounty contributor list (v9)"
+              body="fund_bounty is permissionless — anyone can top up a work's pool. Every contribution is stored by address with a running total, so who backed enforcement is publicly auditable."
+            />
+            <SignalCard
+              name="takedown notice (v9)"
+              body="Once an INFRINGEMENT verdict survives the appeal grace window, anyone can issue an immutable, structured takedown bundle. The contract stamps anchor summary, verdict, similarity, perspectives, canonical URL, and appeal state — a chain-of-custody proof a lawyer or platform can rely on."
             />
           </div>
         </SectionShell>
@@ -2324,6 +2626,9 @@ function VerdictPanel({
   onFileAppeal,
   onResolveAppeal,
   loading,
+  takedownReady,
+  takedownNotice,
+  onIssueTakedown,
 }: {
   v: Verdict;
   appeal?: AppealView | null;
@@ -2333,6 +2638,9 @@ function VerdictPanel({
   onFileAppeal?: () => void;
   onResolveAppeal?: () => void;
   loading?: boolean;
+  takedownReady?: TakedownReady | null;
+  takedownNotice?: TakedownNotice | null;
+  onIssueTakedown?: () => void;
 }) {
   return (
     <div className="mt-6 p-5 gl-card space-y-4">
@@ -2413,6 +2721,144 @@ function VerdictPanel({
         onResolveAppeal={onResolveAppeal}
         loading={loading}
       />
+      <TakedownPanel
+        v={v}
+        ready={takedownReady}
+        notice={takedownNotice}
+        onIssueTakedown={onIssueTakedown}
+        loading={loading}
+      />
+    </div>
+  );
+}
+
+function TakedownPanel({
+  v,
+  ready,
+  notice,
+  onIssueTakedown,
+  loading,
+}: {
+  v: Verdict;
+  ready?: TakedownReady | null;
+  notice?: TakedownNotice | null;
+  onIssueTakedown?: () => void;
+  loading?: boolean;
+}) {
+  // Only surface for INFRINGEMENT results that were not URL-shortcut.
+  if (v.verdict !== "INFRINGEMENT" || v.registered_url_shortcut || v.fetch_failed) {
+    return null;
+  }
+  const alreadyIssued = !!notice;
+  const readyNow = ready?.ready;
+  const reason = ready?.reason || "";
+
+  return (
+    <div className="pt-3 border-t border-card-border space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          On-chain takedown notice
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v9 · public evidence
+          </span>
+        </p>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded-full border font-mono ${
+            alreadyIssued
+              ? "bg-red-500/10 border-red-500/30 text-red-300"
+              : readyNow
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-yellow-500/10 border-yellow-500/30 text-yellow-200"
+          }`}
+        >
+          {alreadyIssued ? "issued" : readyNow ? "ready" : reason || "pending"}
+        </span>
+      </div>
+
+      {alreadyIssued && notice && (
+        <div className="p-3 gl-card rounded-lg space-y-2 text-xs">
+          <div className="flex justify-between flex-wrap gap-2">
+            <span className="text-[color:var(--foreground-muted)]">
+              issued at epoch
+            </span>
+            <span className="font-mono text-[color:var(--foreground)]">
+              {notice.issued_at_epoch}
+            </span>
+          </div>
+          <div className="flex justify-between flex-wrap gap-2">
+            <span className="text-[color:var(--foreground-muted)]">
+              verdict epoch
+            </span>
+            <span className="font-mono text-[color:var(--foreground)]">
+              {notice.verdict_epoch}
+            </span>
+          </div>
+          <div className="flex justify-between flex-wrap gap-2">
+            <span className="text-[color:var(--foreground-muted)]">
+              similarity
+            </span>
+            <span className="font-mono text-[color:var(--foreground)]">
+              {notice.similarity}
+            </span>
+          </div>
+          {notice.on_watchlist && (
+            <div>
+              <span className="gl-chip gl-chip-accent text-[10px]">
+                on watchlist
+              </span>
+            </div>
+          )}
+          {notice.appeal_uphold && (
+            <div>
+              <span className="gl-chip text-[10px]">
+                survived UPHELD appeal
+              </span>
+            </div>
+          )}
+          <div className="text-[10px] text-[color:var(--foreground-muted)] break-all">
+            issuer:{" "}
+            <span className="font-mono">{notice.issuer}</span>
+          </div>
+        </div>
+      )}
+
+      {!alreadyIssued && !readyNow && ready && (
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Not yet eligible.{" "}
+          {reason === "grace_window" && (
+            <>
+              Grace window: eligible at epoch{" "}
+              <span className="font-mono">{ready.eligible_at_epoch}</span>{" "}
+              (current: {ready.current_epoch}).
+            </>
+          )}
+          {reason === "appeal_pending" && (
+            <>An appeal is pending — resolve it first.</>
+          )}
+          {reason === "appeal_overturned" && (
+            <>Verdict was overturned on appeal.</>
+          )}
+          {reason === "no_verdict" && <>No verdict record on-chain.</>}
+        </p>
+      )}
+
+      {!alreadyIssued && readyNow && (
+        <div className="space-y-2">
+          <p className="text-xs text-[color:var(--foreground-muted)]">
+            The INFRINGEMENT verdict has survived the appeal grace window.
+            Issue a public, structured takedown notice bundle so a lawyer or
+            platform can verify chain-of-custody on-chain.
+          </p>
+          <button
+            type="button"
+            onClick={onIssueTakedown}
+            disabled={loading || !onIssueTakedown}
+            className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold"
+          >
+            Issue takedown notice
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2514,6 +2960,210 @@ function AppealPanel({
             Resolution reasoning:
           </p>
           <p className="text-sm">{appeal.resolution_reason || "(no reasoning stored)"}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BountyPanel({
+  workId,
+  list,
+  amountWei,
+  onAmountChange,
+  onFund,
+  loading,
+}: {
+  workId: string;
+  list: BountyContribList;
+  amountWei: string;
+  onAmountChange: (v: string) => void;
+  onFund: () => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="p-3 gl-card rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Community bounty pool for{" "}
+          <span className="font-mono">{workId}</span>{" "}
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v9 · permissionless funding
+          </span>
+        </p>
+        <span className="text-[10px] text-[color:var(--foreground-muted)]">
+          {list.count} contributor(s)
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="p-2 gl-card rounded-lg">
+          <div className="text-[10px] uppercase tracking-widest text-[color:var(--foreground-muted)] mb-1">
+            current pool
+          </div>
+          <div className="font-mono">{list.current_pool} wei</div>
+        </div>
+        <div className="p-2 gl-card rounded-lg">
+          <div className="text-[10px] uppercase tracking-widest text-[color:var(--foreground-muted)] mb-1">
+            total contributed
+          </div>
+          <div className="font-mono">{list.total_contributed} wei</div>
+        </div>
+      </div>
+      {list.contributors.length > 0 && (
+        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+          {list.contributors.map((c, i) => (
+            <div
+              key={`${c.address}-${i}`}
+              className="flex items-center justify-between gap-2 p-2 rounded-md bg-white/5"
+            >
+              <span className="text-[11px] font-mono break-all">
+                {shortAddr(c.address, 10, 6)}
+              </span>
+              <span className="text-xs font-mono whitespace-nowrap">
+                {c.amount} wei
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="pt-2 border-t border-card-border space-y-2">
+        <p className="text-[11px] text-[color:var(--foreground-muted)]">
+          Anyone can fund this work&apos;s bounty — contribution recorded
+          on-chain by address.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            value={amountWei}
+            onChange={(e) => onAmountChange(e.target.value)}
+            placeholder="wei"
+            className="flex-1"
+            min="1"
+          />
+          <button
+            type="button"
+            onClick={onFund}
+            disabled={loading || !amountWei}
+            className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+          >
+            Fund bounty
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WatchlistPanel({
+  workId,
+  entries,
+  isOwner,
+  newUrl,
+  onNewUrlChange,
+  onAdd,
+  onToggle,
+  loading,
+}: {
+  workId: string;
+  entries: WatchlistEntry[];
+  isOwner: boolean;
+  newUrl: string;
+  onNewUrlChange: (v: string) => void;
+  onAdd: () => void;
+  onToggle: (entry: WatchlistEntry) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="p-3 gl-card rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Suspect watchlist for{" "}
+          <span className="font-mono">{workId}</span>{" "}
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v9 · 2× bounty on hits
+          </span>
+        </p>
+        <span className="text-[10px] text-[color:var(--foreground-muted)]">
+          {entries.length} URL(s)
+        </span>
+      </div>
+      {entries.length === 0 && (
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          No watchlisted URLs yet. Owner curates suspect pages here; a scanner
+          hitting a watchlisted URL earns 2× the tier bounty share.
+        </p>
+      )}
+      <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+        {entries.map((e) => (
+          <div
+            key={e.idx}
+            className={`p-2 rounded-md border ${
+              e.active
+                ? "border-card-border bg-white/5"
+                : "border-card-border bg-white/[.02] opacity-70"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <a
+                href={e.suspect_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-mono break-all text-[color:var(--accent-2)] hover:underline flex-1 min-w-0"
+              >
+                {e.suspect_url}
+              </a>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                    e.active
+                      ? "bg-green-500/10 border-green-500/30 text-green-300"
+                      : "bg-gray-500/10 border-gray-500/30 text-gray-300"
+                  }`}
+                >
+                  {e.active ? "active" : "off"}
+                </span>
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => onToggle(e)}
+                    disabled={loading}
+                    className="gl-btn-ghost px-2 py-0.5 text-[10px] rounded-md"
+                  >
+                    {e.active ? "Deactivate" : "Reactivate"}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="text-[10px] text-[color:var(--foreground-muted)] font-mono mt-1 break-all">
+              canonical: {e.canonical_url}
+            </div>
+          </div>
+        ))}
+      </div>
+      {isOwner && (
+        <div className="pt-2 border-t border-card-border space-y-2">
+          <p className="text-[11px] text-[color:var(--foreground-muted)]">
+            Add a suspect URL (owner-only). Duplicates are canonicalized —
+            http/https, case, www, trailing slash, and tracking params are
+            normalized before the dedupe check.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={newUrl}
+              onChange={(e) => onNewUrlChange(e.target.value)}
+              placeholder="https://suspect.example.com/leak"
+              className="flex-1 font-mono text-xs"
+            />
+            <button
+              type="button"
+              onClick={onAdd}
+              disabled={loading || !newUrl}
+              className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+            >
+              Add
+            </button>
+          </div>
         </div>
       )}
     </div>
