@@ -1,4 +1,4 @@
-# v0.2.16
+# v0.3.0 — v8 License Marketplace
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 import contextlib
 import hashlib
@@ -91,6 +91,13 @@ def reputation_tier(honest: int, overturned: int) -> str:
     if honest >= 3 and overturned <= 1:
         return TIER_SILVER
     return TIER_BRONZE
+
+
+# v8 — License Marketplace constants.
+MAX_TIERS_PER_WORK = 8
+MAX_COAUTHORS_PER_WORK = 4
+BPS_TOTAL = 10000
+DEFAULT_TIER_NAME = "default"
 
 
 ANCHOR_PRINCIPLE = (
@@ -405,18 +412,85 @@ class Contract(gl.Contract):
     # v7 — Scanner reputation. Keys are `str(addr)`.
     scanner_honest: TreeMap[str, u256]
     scanner_overturned: TreeMap[str, u256]
+    # v8 — License Marketplace: multi-tier offers.
+    license_tiers_count: TreeMap[str, u256]      # key: work_id
+    tier_name: TreeMap[str, str]                 # key: f"{work_id}:{tier_idx}"
+    tier_price: TreeMap[str, u256]
+    tier_duration_epochs: TreeMap[str, u256]     # 0 = perpetual
+    tier_active: TreeMap[str, bool]
+    # v8 — per-license metadata (extends self.licensees). key: f"{work_id}:{addr}"
+    license_tier_idx: TreeMap[str, u256]
+    license_expires_at: TreeMap[str, u256]       # 0 = perpetual, else epoch cap
+    license_purchased_at: TreeMap[str, u256]
+    # v8 — royalty splits (co-authors with basis points summing to 10000).
+    coauthors_count: TreeMap[str, u256]          # key: work_id
+    coauthor_addr: TreeMap[str, str]             # key: f"{work_id}:{idx}"
+    coauthor_bps: TreeMap[str, u256]
 
     admin: Address
     work_counter: u256
     total_received: u256
     # v6 — admin emergency freeze; withdraw() stays available as safety valve
     paused: bool
+    # v8 — global monotonic write epoch; ticks once per state-changing write.
+    # Serves as a deterministic ordering counter for license expiry.
+    epoch: u256
 
     def __init__(self):
         self.admin = gl.message.sender_address
         self.work_counter = u256(0)
         self.total_received = u256(0)
         self.paused = False
+        self.epoch = u256(0)
+
+    def _tick_epoch(self) -> None:
+        """Advance the global write epoch. Called at the start of every write."""
+        self.epoch = checked_add(self.epoch, 1)
+
+    def _split_credit(self, work_id: str, amount: u256) -> None:
+        """Credit `amount` split by coauthor bps. Defaults to primary owner 100%.
+
+        Rounding remainder is credited to the LAST coauthor so the sum of
+        credits equals `amount` exactly (invariant: no wei is lost or minted).
+        """
+        n = int(self.coauthors_count.get(work_id, u256(0)))
+        amt = int(amount)
+        if amt <= 0:
+            return
+        if n == 0:
+            owner = self.owners.get(work_id, ZERO_ADDR)
+            if owner == ZERO_ADDR:
+                return
+            self._credit_address(owner, amount)
+            return
+
+        remaining = amt
+        for i in range(n - 1):
+            key = f"{work_id}:{i}"
+            addr_str = self.coauthor_addr.get(key, "")
+            bps = int(self.coauthor_bps.get(key, u256(0)))
+            if not addr_str or bps == 0:
+                continue
+            share = amt * bps // BPS_TOTAL
+            if share > remaining:
+                share = remaining
+            if share <= 0:
+                continue
+            try:
+                addr = Address(addr_str)
+            except (ValueError, TypeError):
+                continue
+            self._credit_address(addr, u256(share))
+            remaining -= share
+
+        last_addr_str = self.coauthor_addr.get(f"{work_id}:{n - 1}", "")
+        if remaining > 0 and last_addr_str:
+            try:
+                self._credit_address(Address(last_addr_str), u256(remaining))
+            except (ValueError, TypeError):
+                owner = self.owners.get(work_id, ZERO_ADDR)
+                if owner != ZERO_ADDR:
+                    self._credit_address(owner, u256(remaining))
 
     def _require_not_paused(self) -> None:
         if self.paused:
@@ -429,17 +503,20 @@ class Contract(gl.Contract):
     @gl.public.write
     def pause(self) -> bool:
         self._require_admin()
+        self._tick_epoch()
         self.paused = True
         return True
 
     @gl.public.write
     def unpause(self) -> bool:
         self._require_admin()
+        self._tick_epoch()
         self.paused = False
         return False
 
     @gl.public.write
     def set_scans_disabled(self, work_id: str, disabled: bool) -> bool:
+        self._tick_epoch()
         owner = self._require_work_owner(work_id)
         if gl.message.sender_address != owner:
             raise gl.vm.UserError("Only the work owner can toggle scans")
@@ -477,6 +554,7 @@ class Contract(gl.Contract):
         penalty_amount: u256,
     ) -> str:
         self._require_not_paused()
+        self._tick_epoch()
         clean_url = normalise_url(work_url)
         clean_desc = work_desc.strip()
 
@@ -503,12 +581,21 @@ class Contract(gl.Contract):
             {"anchored": False, "reason": "pending: call anchor_work(work_id) to fetch"},
             sort_keys=True,
         )
+        # v8 — auto-create the default tier from the legacy license_price so
+        # register_work stays a single call and old clients keep working.
+        default_tier_key = f"{work_id}:0"
+        self.tier_name[default_tier_key] = DEFAULT_TIER_NAME
+        self.tier_price[default_tier_key] = license_price
+        self.tier_duration_epochs[default_tier_key] = u256(0)
+        self.tier_active[default_tier_key] = True
+        self.license_tiers_count[work_id] = u256(1)
         self.work_counter = checked_add(self.work_counter, 1)
         return work_id
 
     @gl.public.write
     def anchor_work(self, work_id: str) -> str:
         self._require_not_paused()
+        self._tick_epoch()
         owner = self._require_work_owner(work_id)
         if gl.message.sender_address != owner:
             raise gl.vm.UserError("Only the work owner can anchor")
@@ -600,7 +687,13 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def purchase_license(self, work_id: str) -> str:
+        """Legacy single-tier purchase. Routes to tier_0 (auto-created at
+        register_work). Preserves v6 idempotent semantics: a repeat buy from
+        the same address does NOT renew — the payment is refunded to the buyer.
+        Use `purchase_license_tier` for the tiered / renewable flow.
+        """
         self._require_not_paused()
+        self._tick_epoch()
         owner = self._require_work_owner(work_id)
         buyer = gl.message.sender_address
         if buyer == owner:
@@ -613,20 +706,193 @@ class Contract(gl.Contract):
                 self._credit_address(buyer, gl.message.value)
             return "already_licensed"
 
-        price = self.license_price.get(work_id, u256(0))
-        if int(gl.message.value) < int(price):
+        # v8 — route via tier_0 with royalty splits.
+        tier_key = f"{work_id}:0"
+        n_tiers = int(self.license_tiers_count.get(work_id, u256(0)))
+        if n_tiers == 0 or not self.tier_active.get(tier_key, False):
+            price = int(self.license_price.get(work_id, u256(0)))
+        else:
+            price = int(self.tier_price.get(tier_key, u256(0)))
+        if int(gl.message.value) < price:
             raise gl.vm.UserError(
                 f"Insufficient payment: sent {gl.message.value}, need {price}"
             )
 
         self.total_received = checked_add(self.total_received, int(gl.message.value))
         self.licensees[license_key] = buyer
-        self._credit_address(owner, gl.message.value)
+        self.license_tier_idx[license_key] = u256(0)
+        self.license_purchased_at[license_key] = self.epoch
+        # Default tier is perpetual (duration_epochs = 0).
+        self.license_expires_at[license_key] = u256(0)
+        self._split_credit(work_id, gl.message.value)
         return "licensed"
+
+    @gl.public.write
+    def add_license_tier(
+        self,
+        work_id: str,
+        name: str,
+        price: u256,
+        duration_epochs: u256,
+    ) -> u256:
+        """v8 — owner-only. Append a new tier. duration_epochs=0 means perpetual."""
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can add tiers")
+        n = int(self.license_tiers_count.get(work_id, u256(0)))
+        if n >= MAX_TIERS_PER_WORK:
+            raise gl.vm.UserError(f"Tier limit reached (max {MAX_TIERS_PER_WORK})")
+        tier_name = str(name).strip()[:64] or f"tier_{n}"
+        key = f"{work_id}:{n}"
+        self.tier_name[key] = tier_name
+        self.tier_price[key] = price
+        self.tier_duration_epochs[key] = duration_epochs
+        self.tier_active[key] = True
+        self.license_tiers_count[work_id] = checked_add(u256(n), 1)
+        return u256(n)
+
+    @gl.public.write
+    def set_tier_active(self, work_id: str, tier_idx: u256, active: bool) -> bool:
+        """v8 — soft-delete / re-enable a tier. New purchases of an inactive
+        tier revert; existing licenses on that tier are unaffected.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can toggle tiers")
+        n = int(self.license_tiers_count.get(work_id, u256(0)))
+        idx = int(tier_idx)
+        if idx < 0 or idx >= n:
+            raise gl.vm.UserError(f"Invalid tier idx {idx}, have {n} tiers")
+        self.tier_active[f"{work_id}:{idx}"] = active
+        return active
+
+    @gl.public.write.payable
+    def purchase_license_tier(self, work_id: str, tier_idx: u256) -> str:
+        """v8 — buy or renew a specific tier. Value must be >= tier price.
+        Duration is added to the license's expiry epoch — a perpetual (duration
+        0) purchase overrides any prior expiry.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        buyer = gl.message.sender_address
+        if buyer == owner:
+            raise gl.vm.UserError("Owner cannot purchase their own license")
+
+        n = int(self.license_tiers_count.get(work_id, u256(0)))
+        idx = int(tier_idx)
+        if idx < 0 or idx >= n:
+            raise gl.vm.UserError(f"Invalid tier idx {idx}, have {n} tiers")
+        tier_key = f"{work_id}:{idx}"
+        if not self.tier_active.get(tier_key, False):
+            raise gl.vm.UserError(f"Tier {idx} is inactive")
+        price = int(self.tier_price.get(tier_key, u256(0)))
+        if int(gl.message.value) < price:
+            raise gl.vm.UserError(
+                f"Insufficient payment: sent {gl.message.value}, need {price}"
+            )
+
+        duration = int(self.tier_duration_epochs.get(tier_key, u256(0)))
+        current_epoch = int(self.epoch)
+        license_key = self._license_key(work_id, buyer)
+        self.total_received = checked_add(self.total_received, int(gl.message.value))
+        self._split_credit(work_id, gl.message.value)
+
+        if self.licensees.get(license_key, ZERO_ADDR) != ZERO_ADDR:
+            # Renew / extend.
+            old_exp = int(self.license_expires_at.get(license_key, u256(0)))
+            if duration == 0:
+                new_exp = 0
+            else:
+                base = old_exp if old_exp > current_epoch else current_epoch
+                new_exp = base + duration
+            self.license_expires_at[license_key] = u256(new_exp)
+            self.license_tier_idx[license_key] = u256(idx)
+            return json.dumps(
+                {
+                    "status": "renewed",
+                    "tier_idx": idx,
+                    "expires_at": new_exp,
+                    "current_epoch": current_epoch,
+                },
+                sort_keys=True,
+            )
+
+        self.licensees[license_key] = buyer
+        self.license_tier_idx[license_key] = u256(idx)
+        self.license_purchased_at[license_key] = u256(current_epoch)
+        exp = 0 if duration == 0 else current_epoch + duration
+        self.license_expires_at[license_key] = u256(exp)
+        return json.dumps(
+            {
+                "status": "licensed",
+                "tier_idx": idx,
+                "expires_at": exp,
+                "current_epoch": current_epoch,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.write
+    def set_coauthors(self, work_id: str, addresses: list, bps: list) -> u256:
+        """v8 — owner-only. Register up to MAX_COAUTHORS_PER_WORK co-authors
+        with basis-point splits that MUST sum to 10000. Overwrites any prior
+        set. Splits apply to every future license revenue and every UPHELD
+        appeal-stake credit for the work.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can set coauthors")
+        addr_list = list(addresses)
+        bps_list = list(bps)
+        if len(addr_list) != len(bps_list):
+            raise gl.vm.UserError("addresses and bps must have equal length")
+        if len(addr_list) == 0 or len(addr_list) > MAX_COAUTHORS_PER_WORK:
+            raise gl.vm.UserError(
+                f"Must provide 1..{MAX_COAUTHORS_PER_WORK} coauthors"
+            )
+        total = 0
+        parsed = []
+        for raw_addr, raw_bps in zip(addr_list, bps_list):
+            try:
+                coauthor = Address(str(raw_addr))
+            except (ValueError, TypeError) as exc:
+                raise gl.vm.UserError(
+                    f"Invalid coauthor address: {raw_addr}"
+                ) from exc
+            b_int = int(raw_bps)
+            if b_int <= 0 or b_int > BPS_TOTAL:
+                raise gl.vm.UserError(
+                    f"bps must be in 1..{BPS_TOTAL}, got {b_int}"
+                )
+            total += b_int
+            parsed.append((coauthor, b_int))
+        if total != BPS_TOTAL:
+            raise gl.vm.UserError(
+                f"bps must sum to {BPS_TOTAL}, got {total}"
+            )
+        prior = int(self.coauthors_count.get(work_id, u256(0)))
+        for i in range(prior):
+            key = f"{work_id}:{i}"
+            self.coauthor_addr[key] = ""
+            self.coauthor_bps[key] = u256(0)
+        for i, (coauthor, b_int) in enumerate(parsed):
+            key = f"{work_id}:{i}"
+            self.coauthor_addr[key] = str(coauthor)
+            self.coauthor_bps[key] = u256(b_int)
+        self.coauthors_count[work_id] = u256(len(parsed))
+        return u256(len(parsed))
 
     @gl.public.write.payable
     def deposit_infringement_bounty(self, work_id: str) -> u256:
         self._require_not_paused()
+        self._tick_epoch()
         owner = self._require_work_owner(work_id)
         if gl.message.sender_address != owner:
             raise gl.vm.UserError("Only the work owner can deposit bounty")
@@ -653,6 +919,7 @@ class Contract(gl.Contract):
     @gl.public.write
     def scan_for_infringement(self, work_id: str, suspect_url: str) -> str:
         self._require_not_paused()
+        self._tick_epoch()
         self._require_work_owner(work_id)
         if self.work_scan_disabled.get(work_id, False):
             raise gl.vm.UserError(
@@ -884,6 +1151,7 @@ class Contract(gl.Contract):
         Anyone can file except the original scanner.
         """
         self._require_not_paused()
+        self._tick_epoch()
         self._require_work_owner(work_id)
         clean_suspect_url = normalise_url(suspect_url)
         if not is_valid_url(clean_suspect_url):
@@ -957,6 +1225,7 @@ class Contract(gl.Contract):
         NOT rewarded (prevents gaming).
         """
         self._require_not_paused()
+        self._tick_epoch()
         self._require_work_owner(work_id)
 
         clean_suspect_url = normalise_url(suspect_url)
@@ -1109,11 +1378,9 @@ class Contract(gl.Contract):
             outcome = "UPHELD"
             self.appeal_state[verdict_key] = APPEAL_UPHELD
             self.appeal_outcome_reason[verdict_key] = reasoning
-            # Stake goes to the work owner as damages.
+            # v8 — split UPHELD stake across coauthors (defaults to owner 100%).
             if int(stake) > 0:
-                owner = self.owners.get(work_id, ZERO_ADDR)
-                if owner != ZERO_ADDR:
-                    self._credit_address(owner, stake)
+                self._split_credit(work_id, stake)
             # Reward scanner reputation.
             if scanner_str:
                 cur_h = self.scanner_honest.get(scanner_str, u256(0))
@@ -1135,6 +1402,7 @@ class Contract(gl.Contract):
 
     @gl.public.write
     def withdraw(self) -> u256:
+        self._tick_epoch()
         key = str(gl.message.sender_address)
         amount = self.withdrawable_balance.get(key, u256(0))
         if int(amount) == 0:
@@ -1150,11 +1418,95 @@ class Contract(gl.Contract):
 
     @gl.public.view
     def has_license(self, work_id: str, addr: str) -> bool:
+        """v8 — returns True only when the license is present AND not expired.
+        Perpetual licenses (expires_at == 0) always return True.
+        """
         try:
             address = Address(addr)
         except (ValueError, TypeError) as exc:
             raise gl.vm.UserError("Invalid address") from exc
-        return self.licensees.get(self._license_key(work_id, address), ZERO_ADDR) != ZERO_ADDR
+        key = self._license_key(work_id, address)
+        if self.licensees.get(key, ZERO_ADDR) == ZERO_ADDR:
+            return False
+        exp = int(self.license_expires_at.get(key, u256(0)))
+        if exp == 0:
+            return True
+        return int(self.epoch) < exp
+
+    @gl.public.view
+    def get_license(self, work_id: str, addr: str) -> str:
+        """v8 — full license status: tier, expiry epoch, purchase epoch, active flag."""
+        try:
+            address = Address(addr)
+        except (ValueError, TypeError) as exc:
+            raise gl.vm.UserError("Invalid address") from exc
+        key = self._license_key(work_id, address)
+        present = self.licensees.get(key, ZERO_ADDR) != ZERO_ADDR
+        if not present:
+            return json.dumps({"has_license": False, "active": False}, sort_keys=True)
+        exp = int(self.license_expires_at.get(key, u256(0)))
+        current_epoch = int(self.epoch)
+        active = (exp == 0) or (current_epoch < exp)
+        return json.dumps(
+            {
+                "has_license": True,
+                "active": active,
+                "tier_idx": int(self.license_tier_idx.get(key, u256(0))),
+                "expires_at": exp,
+                "purchased_at": int(self.license_purchased_at.get(key, u256(0))),
+                "current_epoch": current_epoch,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def list_license_tiers(self, work_id: str) -> str:
+        n = int(self.license_tiers_count.get(work_id, u256(0)))
+        tiers = []
+        for i in range(n):
+            key = f"{work_id}:{i}"
+            tiers.append(
+                {
+                    "idx": i,
+                    "name": self.tier_name.get(key, ""),
+                    "price": int(self.tier_price.get(key, u256(0))),
+                    "duration_epochs": int(self.tier_duration_epochs.get(key, u256(0))),
+                    "active": self.tier_active.get(key, False),
+                }
+            )
+        return json.dumps({"work_id": work_id, "count": n, "tiers": tiers}, sort_keys=True)
+
+    @gl.public.view
+    def get_coauthors(self, work_id: str) -> str:
+        n = int(self.coauthors_count.get(work_id, u256(0)))
+        coauthors = []
+        if n == 0:
+            owner = self.owners.get(work_id, ZERO_ADDR)
+            if owner != ZERO_ADDR:
+                coauthors.append(
+                    {"address": str(owner), "bps": BPS_TOTAL, "default": True}
+                )
+            return json.dumps(
+                {"work_id": work_id, "count": len(coauthors), "coauthors": coauthors},
+                sort_keys=True,
+            )
+        for i in range(n):
+            key = f"{work_id}:{i}"
+            coauthors.append(
+                {
+                    "address": self.coauthor_addr.get(key, ""),
+                    "bps": int(self.coauthor_bps.get(key, u256(0))),
+                    "default": False,
+                }
+            )
+        return json.dumps(
+            {"work_id": work_id, "count": n, "coauthors": coauthors},
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def get_epoch(self) -> u256:
+        return self.epoch
 
     @gl.public.view
     def get_withdrawable(self, addr: str) -> u256:
@@ -1206,6 +1558,8 @@ class Contract(gl.Contract):
                 "bounty_pool": int(self.infringement_bounty.get(work_id, u256(0))),
                 "anchored": anchored,
                 "anchor_summary": anchor_summary,
+                "tiers_count": int(self.license_tiers_count.get(work_id, u256(0))),
+                "coauthors_count": int(self.coauthors_count.get(work_id, u256(0))),
             },
             sort_keys=True,
         )
@@ -1233,7 +1587,6 @@ class Contract(gl.Contract):
         key = f"{work_id}:{deterministic_hash(canonical)}"
         return self.scan_credited.get(key, False)
 
-    @gl.public.view
     @gl.public.view
     def get_scanner_reputation(self, addr: str) -> str:
         try:
