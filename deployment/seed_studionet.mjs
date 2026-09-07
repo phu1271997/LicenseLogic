@@ -73,7 +73,10 @@ async function waitAccepted(client, hash) {
 }
 
 async function write(label, client, fn, argsArr = [], value = 0n) {
-  console.log(`\n[${label}] ${fn}(${JSON.stringify(argsArr).slice(0, 120)}) value=${value}`);
+  const safe = JSON.stringify(argsArr, (_, v) =>
+    typeof v === "bigint" ? String(v) : v,
+  );
+  console.log(`\n[${label}] ${fn}(${safe.slice(0, 120)}) value=${value}`);
   try {
     const hash = await client.writeContract({
       address: ADDR,

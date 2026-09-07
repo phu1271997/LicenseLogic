@@ -18,5 +18,6 @@ next-env.d.ts
 .seed_pk
 .seed_owner_pk
 .seed_buyer_pk
+.seed_coauthor_pk
 .seed_last_work_id
 .env*

@@ -70,5 +70,8 @@ methods, new economic invariants, new persistent per-license state).
 - **ECONOMICS.md v8 additions section (marketplace + expiry + splits formula):** <https://github.com/phu1271997/LicenseLogic/blob/main/ECONOMICS.md#v8-additions--license-marketplace-multi-tier-expiry-royalty-splits>
 - **CHANGELOG anchor 2026-09-07:** <https://github.com/phu1271997/LicenseLogic/blob/main/CHANGELOG.md#2026-09-07--phase-3-milestone-license-marketplace-v8>
 - **Seed-script v8 steps commit — populates tiers + coauthors + tiered buy on a fresh deploy:** <https://github.com/phu1271997/LicenseLogic/commit/d625f88>
-- **Live contract on Explorer (paste AFTER Studio redeploy):** `https://explorer-studio.genlayer.com/address/<NEW_V8_ADDR>`
-- **Live app section (after Vercel prod ship):** <https://license-logic.vercel.app/#marketplace>
+- **Live v8 contract on Explorer:** <https://explorer-studio.genlayer.com/address/0x55eeAfbb41CF82be82e979D5046724ED624ACd7f>
+- **Live app (v8 marketplace section) — seeded with `work_0` + default tier + `commercial-30d` tier + 70/30 coauthor split + a tiered license already purchased:** <https://license-logic-app.vercel.app/#marketplace>
+- **On-chain tx — `add_license_tier(work_0, "commercial-30d", 2000, 30)`:** `0x54dd90f5198130764efbc3cc9d9c16a7db3ae51a52e8fe877c7e6e02b0784d62`
+- **On-chain tx — `set_coauthors(work_0, [owner, coauthor], [7000, 3000])`:** `0xec1e9a3fc7ac7a8127e45d5b28fe79031d3d85fad11f23eb114fb0ce34c09ca2`
+- **On-chain tx — `purchase_license_tier(work_0, 1)` value=2000 → `get_license` returns `{active:true, tier_idx:1, expires_at:39, purchased_at:6, current_epoch:9}`:** `0x05f3dab788e86eb63ae8fed4cc7fdcdc7861edf994296b5ee5f0dbd6d26d2fea`

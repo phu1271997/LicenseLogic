@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x55eeAfbb41CF82be82e979D5046724ED624ACd7f",
+    "deployed_at": "2026-09-07T00:00:00+07:00",
+    "deployment_tx_hash": "PENDING_FILL",
+    "deployer_address": "PENDING_FILL",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v8 — Phase 2 (rebuild) License Marketplace bundle. Adds multi-tier license offers (add_license_tier / set_tier_active / purchase_license_tier), time-bound license expiry via global write-epoch counter (self.epoch + get_epoch view + has_license expiry semantics + get_license view), and on-chain co-author royalty splits (set_coauthors with bps summing to 10000; _split_credit invariant: sum(splits) == amount exactly, remainder to last coauthor). Every license revenue AND every UPHELD appeal-stake credit now splits. New views: list_license_tiers, get_coauthors, get_epoch, get_license. See CHANGELOG.md 2026-09-07 section."
+  },
+  "studionet_previous_v7_v6": {
     "contract_address": "0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2",
     "deployed_at": "2026-08-29T00:00:00+07:00",
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "v6 — Phase 1 milestones bundle (M2 Security Hardening + M3 AI Enhancement). New methods: pause/unpause/set_scans_disabled + is_paused/get_scans_disabled views. Verdict JSON gains perspectives {legal, forensic, skeptic}. CONSENSUS_PRINCIPLE tightened: similarity ±25 → ±15, matched_elements bucket agreement, perspectives required. Docs (M1) shipped alongside — no contract change for M1. See CHANGELOG.md 2026-08-27 section."
+    "notes": "v6 (Phase 1, ACCEPTED) + v7 (Phase 2 appeal/reputation, REJECTED). Same address served both while v7 storage was added on top of v6 layout. Superseded by v8 marketplace deploy."
   },
   "studionet_previous_v5": {
     "contract_address": "0x637170df1AE9bf4b93DD26ca35ba9Df2bdc37035",
