@@ -65,14 +65,17 @@ evidence surface).
 
 ## Evidence links (v9-only, no overlap with Phase 1 or Phase 2 rebuild)
 
-- **v9 contract commit (Watchtower):** paste after `git push`
-- **v9 test suite (17 cases — bounty + watchlist + takedown):** paste after `git push`
-- **v9 frontend commit (BountyPanel + WatchlistPanel + TakedownPanel):** paste after `git push`
-- **v9 docs commit (SECURITY T15–T18 + ECONOMICS v9 additions + ARCH):** paste after `git push`
+- **v9 contract commit (Watchtower):** https://github.com/phu1271997/LicenseLogic/commit/ffde2be
+- **v9 test suite commit (17 cases — bounty + watchlist + takedown):** https://github.com/phu1271997/LicenseLogic/commit/ad38dd8
+- **v9 frontend commit (BountyPanel + WatchlistPanel + TakedownPanel):** https://github.com/phu1271997/LicenseLogic/commit/9c42814
+- **v9 docs commit (SECURITY T15–T18 + ECONOMICS v9 additions + ARCH):** https://github.com/phu1271997/LicenseLogic/commit/4c489ed
 - **SECURITY.md new threats anchor:** https://github.com/phu1271997/LicenseLogic/blob/main/SECURITY.md#t15--adversarial-bounty-funding-v9
 - **ECONOMICS.md v9 additions anchor:** https://github.com/phu1271997/LicenseLogic/blob/main/ECONOMICS.md#v9-additions--watchtower-community-bounty--watchlist--takedown
 - **CHANGELOG anchor 2026-09-14:** https://github.com/phu1271997/LicenseLogic/blob/main/CHANGELOG.md#2026-09-14--phase-3-milestone-watchtower-v9
 - **Watchtower test file (17 cases):** https://github.com/phu1271997/LicenseLogic/blob/main/tests/test_watchtower.py
-- **Live v9 contract on Explorer:** `https://explorer-studio.genlayer.com/address/<NEW_V9_ADDR>` (paste after redeploy)
-- **Live app watchtower section:** `https://license-logic-app.vercel.app/#watchtower` (verify after Vercel push)
-- **On-chain evidence tx bundle (after reseed) — fund_bounty / add_watchlist_url / issue_takedown_notice:** paste after seeding
+- **Live v9 contract on Explorer:** https://explorer-studio.genlayer.com/address/0xcBEaa4e662C911B4D4Fa97869db98d339F1C83A6
+- **Live app watchtower section (seeded end-to-end):** https://license-logic-app.vercel.app/#watchtower
+- **Deploy tx (v9 contract creation):** `0x0311b3b70e1cef3bdd49385c44a8334350fca6215bbd9920b3e50765f6514c27`
+- **On-chain tx — `fund_bounty(work_0)` value=3000 (permissionless top-up by 0x4fc4f2…2E55; pool 5000→8000):** `0x78ba33b4e0e9c1cebeaedc0ede8ce72a98a5ee132533b5fd9c892cc8e019216d`
+- **On-chain tx — `add_watchlist_url(work_0, example.com/watched-copy)`:** `0x2debec30c441c2b7da78fcb32193f160b8520eb86b691bafcbcb9c7593658cea`
+- **`takedown_ready(work_0, docs.genlayer.com)` view — returns `{ready:false, reason:"grace_window", verdict_epoch:3, eligible_at_epoch:28}` proving the appeal-window guard actively fires on-chain.**

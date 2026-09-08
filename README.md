@@ -16,7 +16,7 @@ The project lets creators register original works, sell usage licenses, and scan
 
 The frontend spins up an auto-funded studionet burner per browser tab — no wallet install required.
 
-1. Open <https://license-logic.vercel.app> → **Browse Works**. Three records visible; `work_1` is anchored with an INFRINGEMENT verdict on file.
+1. Open <https://license-logic-app.vercel.app> → **Browse Works**. Contract v9 Watchtower live at `0xcBEaa4e662C911B4D4Fa97869db98d339F1C83A6` on studionet.
 2. **View Work** `work_1` — see the LLM-consensus anchor summary of `docs.genlayer.com`.
 3. **Scan Infringement** `work_1` vs `https://example.com/` → CLEAR verdict with validator reasoning; vs `https://docs.genlayer.com/` → INFRINGEMENT via the non-payable registered-URL shortcut.
 4. **Purchase License** `work_1`, amount `1000` — you now hold a license.

@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0xcBEaa4e662C911B4D4Fa97869db98d339F1C83A6",
+    "deployed_at": "2026-09-08T00:00:00+07:00",
+    "deployment_tx_hash": "0x0311b3b70e1cef3bdd49385c44a8334350fca6215bbd9920b3e50765f6514c27",
+    "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v9 — Phase 3 Watchtower bundle. Community bounty (fund_bounty payable, anyone can top up; contributors listed on-chain), suspect watchlist (owner add_watchlist_url up to 20; scans on watchlisted URLs earn 2x tier bounty share, capped by pool), on-chain takedown notice registry (issue_takedown_notice after INFRINGEMENT survives 25-epoch appeal grace; idempotent; stores full evidence bundle keyed by verdict_key). New views: list_bounty_contributors, list_watchlist, is_on_watchlist, get_takedown_notice, takedown_ready. See CHANGELOG.md 2026-09-14 section."
+  },
+  "studionet_previous_v8": {
     "contract_address": "0x55eeAfbb41CF82be82e979D5046724ED624ACd7f",
     "deployed_at": "2026-09-07T00:00:00+07:00",
     "deployment_tx_hash": "PENDING_FILL",
     "deployer_address": "PENDING_FILL",
     "abi_hash": "PENDING_FILL",
-    "notes": "v8 — Phase 2 (rebuild) License Marketplace bundle. Adds multi-tier license offers (add_license_tier / set_tier_active / purchase_license_tier), time-bound license expiry via global write-epoch counter (self.epoch + get_epoch view + has_license expiry semantics + get_license view), and on-chain co-author royalty splits (set_coauthors with bps summing to 10000; _split_credit invariant: sum(splits) == amount exactly, remainder to last coauthor). Every license revenue AND every UPHELD appeal-stake credit now splits. New views: list_license_tiers, get_coauthors, get_epoch, get_license. See CHANGELOG.md 2026-09-07 section."
+    "notes": "v8 — Phase 2 (rebuild) License Marketplace bundle. Multi-tier license offers, epoch-based license expiry, on-chain coauthor royalty splits. Superseded by v9 Watchtower deploy."
   },
   "studionet_previous_v7_v6": {
     "contract_address": "0x19DaA769E49a42eEC3808c6c895eC266aD5CE9E2",
