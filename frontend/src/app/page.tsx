@@ -37,6 +37,7 @@ interface LicenseTier {
   price: number;
   duration_epochs: number;
   active: boolean;
+  transferable?: boolean; // v10
 }
 
 interface Coauthor {
@@ -52,6 +53,26 @@ interface LicenseView {
   expires_at?: number;
   purchased_at?: number;
   current_epoch?: number;
+  // v10
+  transferable?: boolean;
+  transferred_in_count?: number;
+  resale_listed?: boolean;
+  resale_ask_price?: number;
+}
+
+// v10 — Secondary Market
+interface ResaleListing {
+  seller: string;
+  ask_price: number;
+  tier_idx: number;
+  expires_at: number;
+}
+
+interface ResaleList {
+  work_id: string;
+  count: number;
+  royalty_bps: number;
+  listings: ResaleListing[];
 }
 
 // v9 — Watchtower
@@ -226,6 +247,7 @@ const NAV_LINKS = [
   { href: "#app", label: "Try the app" },
   { href: "#marketplace", label: "Marketplace" },
   { href: "#watchtower", label: "Watchtower" },
+  { href: "#secondary", label: "Resale" },
   { href: "#verdicts", label: "Verdicts" },
   { href: "#architecture", label: "Architecture" },
   { href: "#compare", label: "vs Solidity" },
@@ -277,6 +299,11 @@ export default function Home() {
   const [takedownNotice, setTakedownNotice] = useState<TakedownNotice | null>(
     null
   );
+  // v10 — Secondary Market state
+  const [viewResale, setViewResale] = useState<ResaleList | null>(null);
+  const [royaltyBpsInput, setRoyaltyBpsInput] = useState<string>("500");
+  const [resaleAskInput, setResaleAskInput] = useState<string>("1500");
+  const [transferToInput, setTransferToInput] = useState<string>("");
 
   // Scan form
   const [scanWorkId, setScanWorkId] = useState("");
@@ -556,6 +583,18 @@ export default function Home() {
     } catch {
       setViewWatchlist(null);
     }
+    // v10 — resale listings + current royalty bps
+    try {
+      const raw = await readContract("list_resale_listings", [workId]);
+      const parsed: ResaleList =
+        typeof raw === "string"
+          ? JSON.parse(raw)
+          : (raw as unknown as ResaleList);
+      setViewResale(parsed);
+      setRoyaltyBpsInput(String(parsed.royalty_bps));
+    } catch {
+      setViewResale(null);
+    }
   }, []);
 
   async function handleFundBounty(workId: string) {
@@ -691,6 +730,201 @@ export default function Home() {
       setStatus({
         type: "error",
         msg: `Takedown failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  // v10 — Secondary market handlers
+  async function handleToggleTransferable(workId: string, tier: LicenseTier) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep(
+      tier.transferable ? "Locking tier…" : "Making tier transferable…"
+    );
+    try {
+      const { hash, wait } = await writeContract("set_tier_transferable", [
+        workId,
+        tier.idx,
+        !tier.transferable,
+      ]);
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Tier ${tier.idx} ${!tier.transferable ? "unlocked" : "locked"} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Toggle transferable failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleSetRoyaltyBps(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Setting resale royalty…");
+    try {
+      const bps = BigInt(royaltyBpsInput || "0");
+      if (bps < BigInt(0) || bps > BigInt(2000)) {
+        throw new Error("bps must be 0..2000 (0..20%)");
+      }
+      const { hash, wait } = await writeContract("set_resale_royalty_bps", [
+        workId,
+        bps,
+      ]);
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Resale royalty set to ${bps} bps (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Set royalty failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleTransferLicense(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Transferring license…");
+    try {
+      const to = transferToInput.trim();
+      if (!to) throw new Error("Recipient address required");
+      const { hash, wait } = await writeContract("transfer_license", [
+        workId,
+        to,
+      ]);
+      setTransferToInput("");
+      try {
+        const raw = await readContract("get_license", [workId, BURNER_ADDRESS]);
+        const parsed: LicenseView =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as unknown as LicenseView);
+        setLicenseView(parsed);
+      } catch {}
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `License transferred (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Transfer failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleListForResale(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Listing for resale…");
+    try {
+      const ask = BigInt(resaleAskInput || "0");
+      if (ask <= BigInt(0)) throw new Error("Ask price must be > 0");
+      const { hash, wait } = await writeContract("list_for_resale", [
+        workId,
+        ask,
+      ]);
+      await loadWorkExtras(workId);
+      try {
+        const raw = await readContract("get_license", [workId, BURNER_ADDRESS]);
+        const parsed: LicenseView =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as unknown as LicenseView);
+        setLicenseView(parsed);
+      } catch {}
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Listed for ${ask} wei (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `List failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleCancelResale(workId: string) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Cancelling resale listing…");
+    try {
+      const { hash, wait } = await writeContract("cancel_resale", [workId]);
+      await loadWorkExtras(workId);
+      try {
+        const raw = await readContract("get_license", [workId, BURNER_ADDRESS]);
+        const parsed: LicenseView =
+          typeof raw === "string"
+            ? JSON.parse(raw)
+            : (raw as unknown as LicenseView);
+        setLicenseView(parsed);
+      } catch {}
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Resale cancelled (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Cancel failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+      setLoadingStep("");
+    }
+  }
+
+  async function handleBuyResale(
+    workId: string,
+    seller: string,
+    askPrice: number
+  ) {
+    setLoading(true);
+    setStatus(null);
+    setLoadingStep("Buying from resale…");
+    try {
+      const { hash, wait } = await writeContract(
+        "buy_from_resale",
+        [workId, seller],
+        BigInt(askPrice)
+      );
+      await loadWorkExtras(workId);
+      setStatus({
+        type: wait.timedOut ? "warn" : "success",
+        msg: `Bought resale license from ${shortAddr(seller)} (${describeWait(wait)})`,
+        txHash: hash,
+      });
+    } catch (err: unknown) {
+      setStatus({
+        type: "error",
+        msg: `Buy resale failed: ${err instanceof Error ? err.message : String(err)}`,
       });
     } finally {
       setLoading(false);
@@ -1501,6 +1735,87 @@ export default function Home() {
                         </span>
                       </div>
                     </div>
+
+                    {licenseView.transferable && licenseView.active && (
+                      <div className="pt-3 mt-3 border-t border-card-border space-y-3">
+                        <p className="text-xs text-[color:var(--foreground-muted)]">
+                          v10 · your license is on a transferable tier
+                          {licenseView.transferred_in_count! > 0 && (
+                            <span className="ml-2 gl-chip text-[10px]">
+                              transferred in ×{licenseView.transferred_in_count}
+                            </span>
+                          )}
+                        </p>
+                        {/* Transfer form */}
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={transferToInput}
+                            onChange={(e) => setTransferToInput(e.target.value)}
+                            placeholder="0x… recipient"
+                            className="flex-1 font-mono text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleTransferLicense(
+                                normaliseWorkId(licWorkId)
+                              )
+                            }
+                            disabled={loading || !transferToInput}
+                            className="gl-btn-ghost px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+                          >
+                            Transfer
+                          </button>
+                        </div>
+                        {/* Resale listing */}
+                        {licenseView.resale_listed ? (
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <p className="text-xs">
+                              Listed for{" "}
+                              <span className="font-mono">
+                                {licenseView.resale_ask_price} wei
+                              </span>
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleCancelResale(normaliseWorkId(licWorkId))
+                              }
+                              disabled={loading}
+                              className="gl-btn-ghost px-3 py-1.5 rounded-lg text-[11px] font-semibold"
+                            >
+                              Cancel resale
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <input
+                              type="number"
+                              value={resaleAskInput}
+                              onChange={(e) =>
+                                setResaleAskInput(e.target.value)
+                              }
+                              placeholder="ask wei"
+                              className="flex-1 font-mono text-xs"
+                              min="1"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleListForResale(
+                                  normaliseWorkId(licWorkId)
+                                )
+                              }
+                              disabled={loading || !resaleAskInput}
+                              className="gl-btn-primary px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+                            >
+                              List for sale
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1756,6 +2071,31 @@ export default function Home() {
                         onDurationChange={setNewTierDuration}
                         onAddTier={() => handleAddTier(workInfo.work_id)}
                         onToggleTier={(t) => handleToggleTier(workInfo.work_id, t)}
+                        onToggleTransferable={(t) =>
+                          handleToggleTransferable(workInfo.work_id, t)
+                        }
+                      />
+                    )}
+
+                    {/* v10 — Resale market */}
+                    {viewResale && (
+                      <ResalePanel
+                        workId={workInfo.work_id}
+                        list={viewResale}
+                        isOwner={
+                          !!workInfo.owner &&
+                          workInfo.owner.toLowerCase() ===
+                            BURNER_ADDRESS.toLowerCase()
+                        }
+                        royaltyBpsInput={royaltyBpsInput}
+                        onRoyaltyChange={setRoyaltyBpsInput}
+                        onSaveRoyalty={() =>
+                          handleSetRoyaltyBps(workInfo.work_id)
+                        }
+                        onBuy={(seller, ask) =>
+                          handleBuyResale(workInfo.work_id, seller, ask)
+                        }
+                        loading={loading}
                       />
                     )}
 
@@ -1977,6 +2317,32 @@ export default function Home() {
           </div>
         </SectionShell>
 
+        {/* ─── v10 · Secondary Market ─── */}
+        <SectionShell
+          id="secondary"
+          eyebrow="v10 · Secondary Market"
+          title="Transferable licenses, on-chain resale, automatic creator royalty."
+        >
+          <div className="grid md:grid-cols-3 gap-4">
+            <MarketCard
+              title="Transferable licenses"
+              body="Each tier now carries a transferable flag the owner can opt in per tier. Locked tiers behave exactly as before; unlocked tiers let the holder hand the license to another address with transfer_license — the license record, tier and expiry move atomically."
+              api="set_tier_transferable(work_id, tier_idx, true)"
+            />
+            <MarketCard
+              title="On-chain resale market"
+              body="A holder on a transferable tier can list_for_resale at any ask price. Anyone can buy_from_resale; the contract splits the payment, moves the license, refunds any overpay, and auto-closes the listing — no off-chain marketplace needed."
+              api="buy_from_resale(work_id, seller)"
+              accent
+            />
+            <MarketCard
+              title="Perpetual creator royalty"
+              body="Every resale routes a configurable royalty (default 5%, cap 20%) through _split_credit so it lands on the current co-author basis points. Creators earn on every hop, forever — the enforcement is on-chain, not a Terms-of-Service promise."
+              api="set_resale_royalty_bps(work_id, bps)"
+            />
+          </div>
+        </SectionShell>
+
         {/* ─── Verdict examples ─── */}
         <SectionShell
           id="verdicts"
@@ -2063,6 +2429,18 @@ export default function Home() {
             <SignalCard
               name="takedown notice (v9)"
               body="Once an INFRINGEMENT verdict survives the appeal grace window, anyone can issue an immutable, structured takedown bundle. The contract stamps anchor summary, verdict, similarity, perspectives, canonical URL, and appeal state — a chain-of-custody proof a lawyer or platform can rely on."
+            />
+            <SignalCard
+              name="tier_transferable (v10)"
+              body="Owner opts each tier in or out of transferability. Locked tiers reject transfer_license AND list_for_resale on-chain — the frontend just mirrors the flag. Toggling OFF blocks new transfers without touching existing licenses."
+            />
+            <SignalCard
+              name="resale_royalty_bps (v10)"
+              body="Every buy_from_resale routes royalty = ask * bps // 10000 through _split_credit, so co-author percentages still apply. Capped at 2000 bps (20%). Setting 0 explicitly opts out of the 500 bps (5%) default."
+            />
+            <SignalCard
+              name="atomic license move (v10)"
+              body="transfer_license and buy_from_resale both call _move_license_state which shifts licensees, tier_idx, expiry and purchased_at from seller to buyer in one write, auto-cancels any prior resale listing, and bumps license_transferred_count."
             />
           </div>
         </SectionShell>
@@ -2966,6 +3344,127 @@ function AppealPanel({
   );
 }
 
+function ResalePanel({
+  workId,
+  list,
+  isOwner,
+  royaltyBpsInput,
+  onRoyaltyChange,
+  onSaveRoyalty,
+  onBuy,
+  loading,
+}: {
+  workId: string;
+  list: ResaleList;
+  isOwner: boolean;
+  royaltyBpsInput: string;
+  onRoyaltyChange: (v: string) => void;
+  onSaveRoyalty: () => void;
+  onBuy: (seller: string, askPrice: number) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="p-3 gl-card rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          Secondary market for <span className="font-mono">{workId}</span>{" "}
+          <span className="ml-2 gl-chip gl-chip-accent text-[10px]">
+            v10 · royalty on every resale
+          </span>
+        </p>
+        <span className="text-[10px] text-[color:var(--foreground-muted)]">
+          {list.count} listing(s) · royalty{" "}
+          <span className="font-mono">{(list.royalty_bps / 100).toFixed(2)}%</span>
+        </span>
+      </div>
+      {list.listings.length === 0 && (
+        <p className="text-xs text-[color:var(--foreground-muted)]">
+          No active resale listings. A license holder on a transferable tier
+          can list here with any ask price.
+        </p>
+      )}
+      <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+        {list.listings.map((l) => {
+          const royalty = Math.floor((l.ask_price * list.royalty_bps) / 10000);
+          const isSelf =
+            l.seller.toLowerCase() === BURNER_ADDRESS.toLowerCase();
+          return (
+            <div
+              key={l.seller}
+              className="p-2.5 rounded-md border border-card-border bg-white/5"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] font-mono">
+                  {shortAddr(l.seller, 10, 6)}
+                  {isSelf && (
+                    <span className="ml-2 gl-chip text-[10px]">
+                      you
+                    </span>
+                  )}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono">
+                    {l.ask_price} wei
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onBuy(l.seller, l.ask_price)}
+                    disabled={loading || isSelf}
+                    className="gl-btn-primary px-3 py-1 rounded-md text-[11px] font-semibold"
+                    title={
+                      isSelf
+                        ? "You cannot buy your own listing"
+                        : `Sends ${l.ask_price} wei`
+                    }
+                  >
+                    Buy
+                  </button>
+                </div>
+              </div>
+              <div className="text-[10px] text-[color:var(--foreground-muted)] mt-1">
+                tier #{l.tier_idx} · royalty on this sale:{" "}
+                <span className="font-mono">{royalty} wei</span> · seller
+                keeps{" "}
+                <span className="font-mono">{l.ask_price - royalty} wei</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {isOwner && (
+        <div className="pt-2 border-t border-card-border space-y-2">
+          <p className="text-[11px] text-[color:var(--foreground-muted)]">
+            Set the royalty (bps) the contract takes from every resale on this
+            work and routes to the coauthor split. Max 2000 bps (20%). Setting
+            0 opts out of the default 500 bps (5%).
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min="0"
+              max="2000"
+              value={royaltyBpsInput}
+              onChange={(e) => onRoyaltyChange(e.target.value)}
+              className="w-32 font-mono"
+            />
+            <span className="text-xs text-[color:var(--foreground-muted)] self-center whitespace-nowrap">
+              bps ({(Number(royaltyBpsInput) / 100).toFixed(2)}%)
+            </span>
+            <button
+              type="button"
+              onClick={onSaveRoyalty}
+              disabled={loading}
+              className="gl-btn-primary px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap"
+            >
+              Save royalty
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BountyPanel({
   workId,
   list,
@@ -3183,6 +3682,7 @@ function TiersPanel({
   onDurationChange,
   onAddTier,
   onToggleTier,
+  onToggleTransferable,
 }: {
   workId: string;
   tiers: LicenseTier[];
@@ -3196,6 +3696,7 @@ function TiersPanel({
   onDurationChange: (v: string) => void;
   onAddTier: () => void;
   onToggleTier: (t: LicenseTier) => void;
+  onToggleTransferable: (t: LicenseTier) => void;
 }) {
   return (
     <div className="p-3 gl-card rounded-xl space-y-3">
@@ -3242,6 +3743,20 @@ function TiersPanel({
                 >
                   {t.active ? "active" : "inactive"}
                 </span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                    t.transferable
+                      ? "bg-purple-500/10 border-purple-500/30 text-purple-300"
+                      : "bg-white/5 border-card-border text-[color:var(--foreground-muted)]"
+                  }`}
+                  title={
+                    t.transferable
+                      ? "Licenses on this tier can be transferred + resold (v10)"
+                      : "Licenses on this tier are locked to the buyer"
+                  }
+                >
+                  {t.transferable ? "transferable" : "locked"}
+                </span>
                 {isOwner && (
                   <button
                     type="button"
@@ -3250,6 +3765,16 @@ function TiersPanel({
                     className="gl-btn-ghost px-2.5 py-1 text-[10px] rounded-md"
                   >
                     {t.active ? "Deactivate" : "Reactivate"}
+                  </button>
+                )}
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleTransferable(t)}
+                    disabled={loading}
+                    className="gl-btn-ghost px-2.5 py-1 text-[10px] rounded-md"
+                  >
+                    {t.transferable ? "Lock" : "Make transferable"}
                   </button>
                 )}
               </div>
