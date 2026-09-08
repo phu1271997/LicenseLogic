@@ -1,4 +1,4 @@
-# v0.4.0 — v9 Watchtower (community bounty + watchlist + on-chain takedown)
+# v0.5.0 — v10 Secondary Market (transferable licenses + resale + owner royalty)
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 import contextlib
 import hashlib
@@ -107,6 +107,10 @@ WATCHLIST_BOOST_DEN = 1  # (denominator) — effective 2× on watchlist matches
 # Grace window (in write epochs) that must pass AFTER the INFRINGEMENT verdict
 # before a takedown notice can be issued. Keeps a live appeal safe.
 TAKEDOWN_APPEAL_GRACE_EPOCHS = 25
+
+# v10 — Secondary market constants.
+MAX_RESALE_ROYALTY_BPS = 2000     # 20 % cap on owner royalty per resale
+DEFAULT_RESALE_ROYALTY_BPS = 500  # 5 % default until owner overrides
 
 
 ANCHOR_PRINCIPLE = (
@@ -451,6 +455,18 @@ class Contract(gl.Contract):
     takedown_issued_at: TreeMap[str, u256]                    # verdict_key -> epoch
     # v9 — epoch at which a verdict was written (used for takedown grace).
     verdict_epoch: TreeMap[str, u256]                         # verdict_key -> epoch
+    # v10 — Secondary market: transferable licenses + resale listings + royalty.
+    tier_transferable: TreeMap[str, bool]                     # key: f"{work_id}:{tier_idx}" (default False; owner opts in)
+    resale_royalty_bps: TreeMap[str, u256]                    # key: work_id; 0 => DEFAULT_RESALE_ROYALTY_BPS applies
+    resale_royalty_set: TreeMap[str, bool]                    # key: work_id; True once owner explicitly set it (allows 0-bps opt-out)
+    license_transferred_count: TreeMap[str, u256]             # key: f"{work_id}:{addr}" transfers into that address
+    # Resale listings: keyed by current seller (holder). Only one active listing per (work_id, seller).
+    resale_ask_price: TreeMap[str, u256]                      # key: f"{work_id}:{seller}"
+    resale_active: TreeMap[str, bool]                         # key: f"{work_id}:{seller}"
+    # Public resale directory per work (append-only list of ever-listed sellers; UI filters by resale_active).
+    resale_seller_count: TreeMap[str, u256]                   # key: work_id
+    resale_seller_addr: TreeMap[str, str]                     # key: f"{work_id}:{idx}"
+    resale_seller_index_by_addr: TreeMap[str, u256]           # key: f"{work_id}:{seller}" -> idx+1 (0 = never listed)
 
     admin: Address
     work_counter: u256
@@ -1646,6 +1662,303 @@ class Contract(gl.Contract):
         self.takedown_issued_at[verdict_key] = u256(current)
         return notice
 
+    # ─────────────────────────────────────────────────────────────
+    # v10 — Secondary Market: transferable licenses + resale + royalty
+    # ─────────────────────────────────────────────────────────────
+
+    def _resale_royalty_bps_for(self, work_id: str) -> int:
+        """Effective royalty in bps. Falls back to DEFAULT_RESALE_ROYALTY_BPS
+        until the owner explicitly sets it (so 0-bps opt-out is expressible).
+        """
+        if bool(self.resale_royalty_set.get(work_id, False)):
+            return int(self.resale_royalty_bps.get(work_id, u256(0)))
+        return DEFAULT_RESALE_ROYALTY_BPS
+
+    def _remember_resale_seller(self, work_id: str, seller_str: str) -> None:
+        existing = int(
+            self.resale_seller_index_by_addr.get(
+                f"{work_id}:{seller_str}", u256(0)
+            )
+        )
+        if existing > 0:
+            return
+        n = int(self.resale_seller_count.get(work_id, u256(0)))
+        self.resale_seller_addr[f"{work_id}:{n}"] = seller_str
+        self.resale_seller_index_by_addr[f"{work_id}:{seller_str}"] = u256(n + 1)
+        self.resale_seller_count[work_id] = u256(n + 1)
+
+    @gl.public.write
+    def set_tier_transferable(
+        self, work_id: str, tier_idx: u256, transferable: bool
+    ) -> bool:
+        """v10 — owner-only. Opt a tier IN (or OUT) of transferability. New
+        licenses on a non-transferable tier can never be moved. Toggling OFF
+        blocks new transfers but leaves existing licenses in place.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can toggle transferability")
+        n = int(self.license_tiers_count.get(work_id, u256(0)))
+        idx = int(tier_idx)
+        if idx < 0 or idx >= n:
+            raise gl.vm.UserError(f"Invalid tier idx {idx}, have {n} tiers")
+        self.tier_transferable[f"{work_id}:{idx}"] = transferable
+        return transferable
+
+    @gl.public.write
+    def set_resale_royalty_bps(self, work_id: str, bps: u256) -> u256:
+        """v10 — owner-only. Set the royalty in bps taken from every future
+        resale on this work. Bounded by MAX_RESALE_ROYALTY_BPS (20 %).
+        Passing bps=0 explicitly opts OUT of the default 5 %.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        if gl.message.sender_address != owner:
+            raise gl.vm.UserError("Only the work owner can set resale royalty")
+        b_int = int(bps)
+        if b_int > MAX_RESALE_ROYALTY_BPS:
+            raise gl.vm.UserError(
+                f"Royalty exceeds cap {MAX_RESALE_ROYALTY_BPS} bps"
+            )
+        self.resale_royalty_bps[work_id] = u256(b_int)
+        self.resale_royalty_set[work_id] = True
+        return u256(b_int)
+
+    def _move_license_state(
+        self, work_id: str, seller: Address, buyer: Address
+    ) -> None:
+        """Atomically move all per-license state from `seller` to `buyer`.
+        Clears any active resale listing on `seller` (see T20 defense).
+        Called by transfer_license and buy_from_resale.
+        """
+        seller_key = self._license_key(work_id, seller)
+        buyer_key = self._license_key(work_id, buyer)
+
+        # Move core license record.
+        self.licensees[buyer_key] = buyer
+        self.licensees[seller_key] = ZERO_ADDR
+        # Move tier + expiry + purchased-at.
+        self.license_tier_idx[buyer_key] = self.license_tier_idx.get(
+            seller_key, u256(0)
+        )
+        self.license_expires_at[buyer_key] = self.license_expires_at.get(
+            seller_key, u256(0)
+        )
+        self.license_purchased_at[buyer_key] = self.license_purchased_at.get(
+            seller_key, u256(0)
+        )
+        # Reset seller-side records to defaults.
+        self.license_tier_idx[seller_key] = u256(0)
+        self.license_expires_at[seller_key] = u256(0)
+        self.license_purchased_at[seller_key] = u256(0)
+        # Bump buyer's transferred-in count.
+        cur = self.license_transferred_count.get(buyer_key, u256(0))
+        self.license_transferred_count[buyer_key] = checked_add(cur, 1)
+
+        # T20 defense — clear any resale listing the seller had on this work.
+        if bool(self.resale_active.get(seller_key, False)):
+            self.resale_active[seller_key] = False
+            self.resale_ask_price[seller_key] = u256(0)
+
+    @gl.public.write
+    def transfer_license(self, work_id: str, to: str) -> str:
+        """v10 — hand off a license to another address, no payment. Requires:
+        (a) sender currently holds a license on this work,
+        (b) the license's tier is currently transferable,
+        (c) `to` is not the zero address and not the current work owner
+            (owners can't hold their own license),
+        (d) `to` does not already hold a non-expired license on this work.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        seller = gl.message.sender_address
+        seller_key = self._license_key(work_id, seller)
+        if self.licensees.get(seller_key, ZERO_ADDR) == ZERO_ADDR:
+            raise gl.vm.UserError("You do not hold a license on this work")
+
+        try:
+            buyer = Address(to)
+        except (ValueError, TypeError) as exc:
+            raise gl.vm.UserError("Invalid recipient address") from exc
+        if buyer == ZERO_ADDR:
+            raise gl.vm.UserError("Recipient cannot be the zero address")
+        if buyer == owner:
+            raise gl.vm.UserError("Recipient cannot be the work owner")
+        if buyer == seller:
+            raise gl.vm.UserError("Recipient cannot be the sender")
+
+        tier_idx = int(self.license_tier_idx.get(seller_key, u256(0)))
+        if not self.tier_transferable.get(
+            f"{work_id}:{tier_idx}", False
+        ):
+            raise gl.vm.UserError(
+                f"Tier {tier_idx} is not transferable — owner must opt in first"
+            )
+
+        buyer_key = self._license_key(work_id, buyer)
+        if self.licensees.get(buyer_key, ZERO_ADDR) != ZERO_ADDR:
+            # If buyer's existing license has already expired we allow the
+            # transfer to overwrite; live licenses are rejected to keep the
+            # 1-license-per-address invariant.
+            buyer_exp = int(self.license_expires_at.get(buyer_key, u256(0)))
+            still_active = (buyer_exp == 0) or (int(self.epoch) < buyer_exp)
+            if still_active:
+                raise gl.vm.UserError(
+                    "Recipient already holds an active license on this work"
+                )
+
+        self._move_license_state(work_id, seller, buyer)
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "from": str(seller),
+                "to": str(buyer),
+                "tier_idx": tier_idx,
+                "epoch": int(self.epoch),
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.write
+    def list_for_resale(self, work_id: str, ask_price: u256) -> str:
+        """v10 — put the caller's license up for sale at `ask_price` wei.
+        Requires the caller currently holds the license AND the tier is
+        transferable. Overwrites any prior listing from the same seller.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        self._require_work_owner(work_id)
+        seller = gl.message.sender_address
+        seller_key = self._license_key(work_id, seller)
+        if self.licensees.get(seller_key, ZERO_ADDR) == ZERO_ADDR:
+            raise gl.vm.UserError("You do not hold a license on this work")
+        tier_idx = int(self.license_tier_idx.get(seller_key, u256(0)))
+        if not self.tier_transferable.get(
+            f"{work_id}:{tier_idx}", False
+        ):
+            raise gl.vm.UserError(
+                f"Tier {tier_idx} is not transferable — cannot list for resale"
+            )
+        if int(ask_price) == 0:
+            raise gl.vm.UserError("Ask price must be greater than 0")
+
+        self.resale_ask_price[seller_key] = ask_price
+        self.resale_active[seller_key] = True
+        self._remember_resale_seller(work_id, str(seller))
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "seller": str(seller),
+                "ask_price": int(ask_price),
+                "tier_idx": tier_idx,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.write
+    def cancel_resale(self, work_id: str) -> bool:
+        """v10 — take your own resale listing down."""
+        self._require_not_paused()
+        self._tick_epoch()
+        self._require_work_owner(work_id)
+        seller = gl.message.sender_address
+        seller_key = self._license_key(work_id, seller)
+        if not bool(self.resale_active.get(seller_key, False)):
+            raise gl.vm.UserError("No active resale listing to cancel")
+        self.resale_active[seller_key] = False
+        self.resale_ask_price[seller_key] = u256(0)
+        return True
+
+    @gl.public.write.payable
+    def buy_from_resale(self, work_id: str, seller: str) -> str:
+        """v10 — buy a specific resale listing. Splits payment:
+          royalty = ask * resale_royalty_bps // 10000  → owner side via
+            _split_credit (so coauthor bps still apply)
+          proceeds = ask - royalty                     → seller
+          overpay = msg.value - ask                    → refunded to buyer
+        Transfers the license record from seller to buyer atomically.
+        """
+        self._require_not_paused()
+        self._tick_epoch()
+        owner = self._require_work_owner(work_id)
+        buyer = gl.message.sender_address
+
+        try:
+            seller_addr = Address(seller)
+        except (ValueError, TypeError) as exc:
+            raise gl.vm.UserError("Invalid seller address") from exc
+        if seller_addr == buyer:
+            raise gl.vm.UserError("You cannot buy your own listing")
+        if buyer == owner:
+            raise gl.vm.UserError("Owner cannot buy a resale of their own work")
+
+        seller_key = self._license_key(work_id, seller_addr)
+        if not bool(self.resale_active.get(seller_key, False)):
+            raise gl.vm.UserError("No active resale listing from that seller")
+        ask = int(self.resale_ask_price.get(seller_key, u256(0)))
+        if ask <= 0:
+            raise gl.vm.UserError("Listing has zero ask price")
+        if self.licensees.get(seller_key, ZERO_ADDR) == ZERO_ADDR:
+            # Seller no longer holds — auto-close and refund below.
+            self.resale_active[seller_key] = False
+            self.resale_ask_price[seller_key] = u256(0)
+            raise gl.vm.UserError(
+                "Listing seller no longer holds the license (listing closed)"
+            )
+
+        if int(gl.message.value) < ask:
+            raise gl.vm.UserError(
+                f"Insufficient payment: sent {gl.message.value}, need {ask}"
+            )
+
+        # Reject if buyer already holds an ACTIVE license on this work.
+        buyer_key = self._license_key(work_id, buyer)
+        if self.licensees.get(buyer_key, ZERO_ADDR) != ZERO_ADDR:
+            buyer_exp = int(self.license_expires_at.get(buyer_key, u256(0)))
+            still_active = (buyer_exp == 0) or (int(self.epoch) < buyer_exp)
+            if still_active:
+                raise gl.vm.UserError(
+                    "You already hold an active license on this work"
+                )
+
+        # Book the money.
+        self.total_received = checked_add(
+            self.total_received, int(gl.message.value)
+        )
+
+        bps = self._resale_royalty_bps_for(work_id)
+        royalty = ask * bps // BPS_TOTAL
+        seller_proceeds = ask - royalty
+        overpay = int(gl.message.value) - ask
+
+        if royalty > 0:
+            self._split_credit(work_id, u256(royalty))
+        if seller_proceeds > 0:
+            self._credit_address(seller_addr, u256(seller_proceeds))
+        if overpay > 0:
+            self._credit_address(buyer, u256(overpay))
+
+        # Move license state seller → buyer (auto-cancels the listing).
+        self._move_license_state(work_id, seller_addr, buyer)
+
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "seller": str(seller_addr),
+                "buyer": str(buyer),
+                "ask": ask,
+                "royalty_bps": bps,
+                "royalty": royalty,
+                "seller_proceeds": seller_proceeds,
+                "overpay_refunded": overpay,
+            },
+            sort_keys=True,
+        )
+
     @gl.public.write
     def withdraw(self) -> u256:
         self._tick_epoch()
@@ -1693,14 +2006,26 @@ class Contract(gl.Contract):
         exp = int(self.license_expires_at.get(key, u256(0)))
         current_epoch = int(self.epoch)
         active = (exp == 0) or (current_epoch < exp)
+        tier_idx = int(self.license_tier_idx.get(key, u256(0)))
+        transferable = bool(
+            self.tier_transferable.get(f"{work_id}:{tier_idx}", False)
+        )
+        listing_key = key
+        resale_active = bool(self.resale_active.get(listing_key, False))
         return json.dumps(
             {
                 "has_license": True,
                 "active": active,
-                "tier_idx": int(self.license_tier_idx.get(key, u256(0))),
+                "tier_idx": tier_idx,
                 "expires_at": exp,
                 "purchased_at": int(self.license_purchased_at.get(key, u256(0))),
                 "current_epoch": current_epoch,
+                "transferable": transferable,
+                "transferred_in_count": int(
+                    self.license_transferred_count.get(key, u256(0))
+                ),
+                "resale_listed": resale_active,
+                "resale_ask_price": int(self.resale_ask_price.get(listing_key, u256(0))),
             },
             sort_keys=True,
         )
@@ -1718,6 +2043,7 @@ class Contract(gl.Contract):
                     "price": int(self.tier_price.get(key, u256(0))),
                     "duration_epochs": int(self.tier_duration_epochs.get(key, u256(0))),
                     "active": self.tier_active.get(key, False),
+                    "transferable": bool(self.tier_transferable.get(key, False)),
                 }
             )
         return json.dumps({"work_id": work_id, "count": n, "tiers": tiers}, sort_keys=True)
@@ -1883,6 +2209,78 @@ class Contract(gl.Contract):
     @gl.public.view
     def get_bounty(self, work_id: str) -> u256:
         return self.infringement_bounty.get(work_id, u256(0))
+
+    @gl.public.view
+    def get_resale_royalty_bps(self, work_id: str) -> u256:
+        return u256(self._resale_royalty_bps_for(work_id))
+
+    @gl.public.view
+    def get_resale_listing(self, work_id: str, seller: str) -> str:
+        try:
+            addr = Address(seller)
+        except (ValueError, TypeError) as exc:
+            raise gl.vm.UserError("Invalid seller address") from exc
+        key = self._license_key(work_id, addr)
+        active = bool(self.resale_active.get(key, False))
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "seller": str(addr),
+                "active": active,
+                "ask_price": int(self.resale_ask_price.get(key, u256(0))),
+                "tier_idx": int(self.license_tier_idx.get(key, u256(0))),
+                "expires_at": int(self.license_expires_at.get(key, u256(0))),
+                "holder_present": self.licensees.get(key, ZERO_ADDR) != ZERO_ADDR,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def list_resale_listings(self, work_id: str) -> str:
+        """v10 — every active resale listing on a work. Iterates the append-only
+        seller directory and filters by resale_active + license still held.
+        """
+        n = int(self.resale_seller_count.get(work_id, u256(0)))
+        listings = []
+        current_epoch = int(self.epoch)
+        for i in range(n):
+            seller_str = self.resale_seller_addr.get(f"{work_id}:{i}", "")
+            if not seller_str:
+                continue
+            key = f"{work_id}:{seller_str}"
+            if not bool(self.resale_active.get(key, False)):
+                continue
+            # Skip stale listings whose seller no longer holds.
+            if self.licensees.get(key, ZERO_ADDR) == ZERO_ADDR:
+                continue
+            exp = int(self.license_expires_at.get(key, u256(0)))
+            active_license = (exp == 0) or (current_epoch < exp)
+            if not active_license:
+                continue
+            tier_idx = int(self.license_tier_idx.get(key, u256(0)))
+            listings.append(
+                {
+                    "seller": seller_str,
+                    "ask_price": int(self.resale_ask_price.get(key, u256(0))),
+                    "tier_idx": tier_idx,
+                    "expires_at": exp,
+                }
+            )
+        return json.dumps(
+            {
+                "work_id": work_id,
+                "count": len(listings),
+                "royalty_bps": self._resale_royalty_bps_for(work_id),
+                "listings": listings,
+            },
+            sort_keys=True,
+        )
+
+    @gl.public.view
+    def is_tier_transferable(self, work_id: str, tier_idx: u256) -> bool:
+        return bool(
+            self.tier_transferable.get(f"{work_id}:{int(tier_idx)}", False)
+        )
 
     @gl.public.view
     def get_work_counter(self) -> u256:
