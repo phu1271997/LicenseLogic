@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x476Ee007F9bd26b33a5707dB364d7b1D469e86a5",
+    "deployed_at": "2026-09-08T00:00:00+07:00",
+    "deployment_tx_hash": "0x2ff0fa2e301daac783203263560c0cf5d2fcdbbe6aad6dab48e0437b0ab20a7a",
+    "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v10 — Phase 4 Secondary Market bundle. Transferable licenses (per-tier tier_transferable opt-in via set_tier_transferable; transfer_license atomic move), on-chain resale market (list_for_resale / cancel_resale / buy_from_resale payable, buyer must not already hold active license, seller must hold + tier transferable), perpetual creator royalty (set_resale_royalty_bps cap 2000, default 500; royalty routed via _split_credit so coauthor bps apply on every resale hop). New views: get_resale_royalty_bps, get_resale_listing, list_resale_listings, is_tier_transferable. See CHANGELOG.md 2026-09-21 section."
+  },
+  "studionet_previous_v9": {
     "contract_address": "0xcBEaa4e662C911B4D4Fa97869db98d339F1C83A6",
     "deployed_at": "2026-09-08T00:00:00+07:00",
     "deployment_tx_hash": "0x0311b3b70e1cef3bdd49385c44a8334350fca6215bbd9920b3e50765f6514c27",
     "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
     "abi_hash": "PENDING_FILL",
-    "notes": "v9 — Phase 3 Watchtower bundle. Community bounty (fund_bounty payable, anyone can top up; contributors listed on-chain), suspect watchlist (owner add_watchlist_url up to 20; scans on watchlisted URLs earn 2x tier bounty share, capped by pool), on-chain takedown notice registry (issue_takedown_notice after INFRINGEMENT survives 25-epoch appeal grace; idempotent; stores full evidence bundle keyed by verdict_key). New views: list_bounty_contributors, list_watchlist, is_on_watchlist, get_takedown_notice, takedown_ready. See CHANGELOG.md 2026-09-14 section."
+    "notes": "v9 — Phase 3 Watchtower bundle (community bounty + suspect watchlist + on-chain takedown notice). Superseded by v10 Secondary Market deploy."
   },
   "studionet_previous_v8": {
     "contract_address": "0x55eeAfbb41CF82be82e979D5046724ED624ACd7f",

@@ -61,14 +61,18 @@ tradable assets, novel on-chain royalty enforcement).
 
 ## Evidence links (v10-only — không trùng Phase 1 / 2 / 3)
 
-- **v10 contract commit (Secondary Market):** paste after `git push`
-- **v10 test-suite commit (19 cases — transferability + resale + royalty):** paste after `git push`
-- **v10 frontend commit (ResalePanel + transfer/list controls + transferable pill):** paste after `git push`
-- **v10 docs commit (SECURITY T19–T22 + ECONOMICS v10 section + ARCH):** paste after `git push`
+- **v10 contract commit (Secondary Market):** https://github.com/phu1271997/LicenseLogic/commit/69b8c76
+- **v10 test-suite commit (19 cases — transferability + resale + royalty):** https://github.com/phu1271997/LicenseLogic/commit/8d914ed
+- **v10 frontend commit (ResalePanel + transfer/list controls + transferable pill):** https://github.com/phu1271997/LicenseLogic/commit/10a68b8
+- **v10 docs commit (SECURITY T19–T22 + ECONOMICS v10 section + ARCH):** https://github.com/phu1271997/LicenseLogic/commit/d4814e0
 - **Secondary market test file (19 cases):** https://github.com/phu1271997/LicenseLogic/blob/main/tests/test_secondary_market.py
 - **SECURITY.md new threats anchor:** https://github.com/phu1271997/LicenseLogic/blob/main/SECURITY.md#t19--zombie-resale-listing-after-transfer-v10
 - **ECONOMICS.md v10 additions anchor:** https://github.com/phu1271997/LicenseLogic/blob/main/ECONOMICS.md#v10-additions--secondary-market-transferable-licenses--resale--royalty
 - **CHANGELOG anchor 2026-09-21:** https://github.com/phu1271997/LicenseLogic/blob/main/CHANGELOG.md#2026-09-21--phase-4-milestone-secondary-market-v10
-- **Live v10 contract on Explorer:** `https://explorer-studio.genlayer.com/address/<NEW_V10_ADDR>` (paste after deploy)
-- **Live app secondary section:** `https://license-logic-app.vercel.app/#secondary` (verify after Vercel push)
-- **On-chain evidence tx bundle (after reseed) — `set_tier_transferable`, `list_for_resale`, `buy_from_resale`:** paste after seeding
+- **Live v10 contract on Explorer:** https://explorer-studio.genlayer.com/address/0x476Ee007F9bd26b33a5707dB364d7b1D469e86a5
+- **Live app secondary section (seeded end-to-end):** https://license-logic-app.vercel.app/#secondary
+- **Deploy tx (v10 contract creation):** `0x2ff0fa2e301daac783203263560c0cf5d2fcdbbe6aad6dab48e0437b0ab20a7a`
+- **On-chain tx — `set_tier_transferable(work_0, 1, true)`:** `0xfbaf00e49c8fe4a459991da3201aebd43211ed96b7a03555610981b75c05eeac`
+- **On-chain tx — `set_resale_royalty_bps(work_0, 500)` (5%):** `0x6276c4b95db4304f62eea3818510eac8fa2a063544031e8138f2b8c4f4974d76`
+- **On-chain tx — `list_for_resale(work_0, 2500)` by first buyer:** `0xa6b9170e5499c290830695fe9b64fb081b5afbaec5824caf0ea54c5f21b8de3a`
+- **On-chain tx — `buy_from_resale(work_0, first_buyer)` value=2500 by secondary buyer 0x372Acb…6cfA. After: `get_license` returns `{active:true, tier_idx:1, transferable:true, transferred_in_count:1}` on the new holder; `list_resale_listings` count 1→0 (listing auto-closed).:** `0x32b5c7df869f44f4cca5ad71bfa09f341634cd317021dae3e665e2564edd3ff0`
