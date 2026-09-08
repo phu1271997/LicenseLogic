@@ -243,6 +243,55 @@ NOT re-stamp `issued_at_epoch`. Nothing in the notice references the
 caller as an authority (`issuer` is metadata only), so a re-issuer can
 never rewrite history.
 
+### T19 — Zombie resale listing after transfer (v10)
+
+**Attack.** Alice lists her license for resale at 500 wei, then privately
+transfers it to Bob for free. If the listing stayed live, anyone reading
+`list_resale_listings` could still try to `buy_from_resale` from Alice,
+overpaying to a seller who no longer holds the license.
+
+**Defense.** `_move_license_state` — the single code path used by both
+`transfer_license` and `buy_from_resale` — auto-clears the seller's
+`resale_active` flag and zeroes their `resale_ask_price`. Belt-and-braces:
+`buy_from_resale` re-checks `licensees[seller_key] != ZERO_ADDR` on entry
+and closes the listing + reverts if the seller no longer holds.
+`list_resale_listings` view also filters out any row where the seller
+has no active license.
+
+### T20 — Royalty griefing via oversized bps (v10)
+
+**Attack.** Owner sets `resale_royalty_bps` to 9999 so every resale
+effectively confiscates the seller's proceeds, poisoning the market.
+
+**Defense.** `set_resale_royalty_bps` reverts with `Royalty exceeds cap
+2000 bps` when the requested value is above `MAX_RESALE_ROYALTY_BPS =
+2000` (20%). This is an on-chain guard — the frontend also clamps the
+input but the contract is the source of truth.
+
+### T21 — Buyer double-license via resale (v10)
+
+**Attack.** Buyer already holds an active license on `work_0` at tier_0.
+They call `buy_from_resale` for a listing on tier_1 hoping to end up with
+two license slots on the same work (or to reset their expiry).
+
+**Defense.** Both `buy_from_resale` and `transfer_license` reject when
+the recipient already holds an active (non-expired) license on the same
+work — `"You already hold an active license on this work"`. Expired
+licenses ARE allowed to be overwritten so a buyer can revive their
+subscription via the resale market cleanly.
+
+### T22 — Non-transferable tier bypass via resale (v10)
+
+**Attack.** Owner leaves tier_0 non-transferable; a holder tries to
+`list_for_resale` anyway, hoping the resale path skips the transferable
+check.
+
+**Defense.** `list_for_resale` reads `license_tier_idx` for the caller,
+looks up `tier_transferable[work_id:tier_idx]`, and reverts with
+`Tier {idx} is not transferable` if the flag is false. `transfer_license`
+enforces the same check. The transferable flag is the sole gate; it is
+never derived from any other field.
+
 ### T9 — Studio storage reset
 
 **Attack.** Not an attack — but Studio may reset storage between builds.

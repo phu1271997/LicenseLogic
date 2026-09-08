@@ -111,6 +111,11 @@ All TreeMaps are keyed by `str` for calldata compatibility (R19 in
 | `bounty_contributor_count/addr/amount/index_by_addr` (v9) | `TreeMap[str, ...]` | permissionless bounty contributor registry (up to 50 per work; repeat contributions aggregate) |
 | `watchlist_count/url/canonical/active/index_by_canonical` (v9) | `TreeMap[str, ...]` | owner-curated suspect URLs (up to 20 per work); scanners get 2× bounty share on active-watchlist hits |
 | `takedown_notice/issued_at/verdict_epoch` (v9) | `TreeMap[str, ...]` | on-chain takedown registry keyed by `verdict_key` |
+| `tier_transferable` (v10) | `TreeMap[str, bool]` keyed `f"{work_id}:{idx}"` | per-tier opt-in for transfer + resale |
+| `resale_royalty_bps/resale_royalty_set` (v10) | `TreeMap[str, ...]` | per-work resale royalty (default 500 bps, cap 2000) |
+| `resale_ask_price/resale_active` (v10) | `TreeMap[str, ...]` keyed `f"{work_id}:{seller}"` | active resale listings |
+| `resale_seller_count/addr/index_by_addr` (v10) | `TreeMap[str, ...]` | append-only per-work resale directory for `list_resale_listings` iteration |
+| `license_transferred_count` (v10) | `TreeMap[str, u256]` | per-address transfers-in on a work |
 
 ## Invariants
 - Every write path that mutates u256 uses `checked_add` / `checked_sub`.

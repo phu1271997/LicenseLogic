@@ -1,5 +1,91 @@
 # CHANGELOG
 
+## 2026-09-21 — Phase 4 Milestone (Secondary Market v10)
+
+Contract v10 (redeploy required). Adds a full on-chain secondary market
+for licenses with perpetual creator royalties enforced by the contract.
+
+### F1 — Transferable licenses (opt-in per tier)
+
+- New storage: `tier_transferable` (bool per `f"{work_id}:{tier_idx}"`).
+  Default false — every existing tier stays locked until the owner
+  explicitly flips it on.
+- New owner-only write: `set_tier_transferable(work_id, tier_idx, bool)`.
+- New payable-less write: `transfer_license(work_id, to)` — reverts on
+  non-transferable tier, `to == owner`, `to == sender`, or if `to`
+  already holds an active license. Move is atomic via the shared
+  `_move_license_state` helper.
+- New per-license counter: `license_transferred_count` — tracks how many
+  times an address has received this work's license.
+- `list_license_tiers` and `get_license` now expose the transferable
+  flag + transferred-in count.
+- New view: `is_tier_transferable(work_id, tier_idx)`.
+
+### F2 — On-chain resale market
+
+- New storage: `resale_ask_price`, `resale_active` (keyed by
+  `f"{work_id}:{seller}"`). Append-only per-work seller directory
+  (`resale_seller_count/addr/index_by_addr`) supports iteration in the
+  new `list_resale_listings` view.
+- `list_for_resale(work_id, ask_price)` — seller must hold a license on
+  a transferable tier; ask must be > 0. Overwrites prior listing from
+  same seller.
+- `cancel_resale(work_id)` — take own listing down.
+- `buy_from_resale(work_id, seller)` payable — reverts on:
+  self-buy, owner buying own work's resale, no active listing,
+  underpayment, seller no longer holds, buyer already holds active
+  license. On success: royalty routed via `_split_credit` (so co-author
+  bps still apply), proceeds → seller, overpay refunded to buyer,
+  license state moved seller→buyer atomically, listing auto-closes.
+- `get_license` extended with `resale_listed` + `resale_ask_price`.
+
+### F3 — Perpetual creator royalty
+
+- New storage: `resale_royalty_bps`, `resale_royalty_set`.
+- `set_resale_royalty_bps(work_id, bps)` — owner-only; capped at
+  `MAX_RESALE_ROYALTY_BPS = 2000` (20%). Setting 0 opts out of the
+  `DEFAULT_RESALE_ROYALTY_BPS = 500` (5%) default.
+- New view: `get_resale_royalty_bps`.
+- Every resale routes `royalty = ask * bps // 10000` through
+  `_split_credit`, so co-author splits still apply. Creators earn on
+  every resale hop, forever, without any off-chain enforcement.
+
+### Frontend
+
+- License tab: after purchase on a transferable tier, the license
+  status card gains a "Transfer to …" input and a "List for sale" input
+  (or Cancel resale when a listing is live). Transferred-in badge.
+- View tab: TiersPanel now shows a `transferable / locked` pill per
+  tier plus an owner-only "Make transferable / Lock" button. New
+  `ResalePanel` renders the public marketplace with per-listing royalty
+  math + one-click Buy, and an owner-only royalty bps input.
+- Landing: new `#secondary` section with three cards, three new signal
+  cards. Nav gets a Resale link.
+
+### Tests
+
+- New `tests/test_secondary_market.py` — 19 cases across three suites:
+  transferability toggles + defaults (3), royalty bounds + defaults (4),
+  transfer_license (5 — including auto-cancel of prior resale + block
+  on active recipient license), resale flow (7 — coauthor split flow,
+  underpayment revert, buyer-already-licensed guard, expired filter,
+  cancel requires active listing).
+- Fast suite: **123 → 142 pass** (1 skipped, 7 deselected).
+
+### Docs
+
+- `SECURITY.md` — four new threats: T19 zombie resale after transfer
+  (defense: `_move_license_state` auto-clears + `buy_from_resale`
+  re-checks + view filters stale rows), T20 royalty griefing
+  (defense: hard 2000 bps cap), T21 buyer double-license via resale
+  (defense: recipient-active guard on both transfer + buy), T22
+  non-transferable tier bypass (defense: `list_for_resale` re-runs the
+  tier_transferable check on-chain).
+- `ECONOMICS.md` — new "v10 additions" section covering transfer,
+  resale flow, royalty formula. Formulas table extended.
+- `ARCHITECTURE.md` — storage table extended with the six new v10
+  storage entries.
+
 ## 2026-09-14 — Phase 3 Milestone (Watchtower v9)
 
 Contract v9 (redeploy required). Turns the enforcement layer from a

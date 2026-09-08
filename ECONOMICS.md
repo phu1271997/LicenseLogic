@@ -146,6 +146,47 @@ issued_at_epoch, appeal_state, appeal_uphold, issuer. Public view
 is a dry-run that tells the frontend WHY a takedown is not yet callable
 (`grace_window`, `appeal_pending`, `appeal_overturned`, etc.).
 
+## v10 additions — Secondary Market (transferable licenses + resale + royalty)
+
+### Transferable licenses
+Per tier a boolean `tier_transferable[work_id:idx]` — default false; owner
+opts in via `set_tier_transferable(work_id, idx, true)`. Only tiers with
+the flag true can be transferred or listed for resale.
+
+- `transfer_license(work_id, to)` — free hand-off; moves license record
+  (tier_idx, expires_at, purchased_at) from sender to recipient, bumps
+  `license_transferred_count[to]`, auto-clears any resale listing the
+  sender had. Reverts on non-transferable tier, `to == owner`,
+  `to == sender`, or if `to` already holds an active license.
+
+### On-chain resale market
+- `list_for_resale(work_id, ask_price)` — seller must hold a license on
+  a transferable tier. Overwrites prior listing from the same seller.
+  Also records the seller in the append-only per-work resale directory.
+- `cancel_resale(work_id)` — take your listing down.
+- `buy_from_resale(work_id, seller)` payable — buyer must NOT already
+  hold an active license on `work_id`, cannot be the owner, cannot be
+  the seller. Reverts if `msg.value < ask_price`. Splits payment:
+
+```
+royalty = ask * resale_royalty_bps // 10000    → _split_credit(work_id) (co-authors)
+proceeds = ask - royalty                       → seller
+overpay = msg.value - ask                      → refunded to buyer
+```
+
+License state is moved atomically by `_move_license_state`.
+
+### Perpetual creator royalty
+`resale_royalty_bps[work_id]` — set via `set_resale_royalty_bps`, capped
+at `MAX_RESALE_ROYALTY_BPS = 2000` (20%). Default when unset is
+`DEFAULT_RESALE_ROYALTY_BPS = 500` (5%); passing 0 explicitly opts out
+of the default (`resale_royalty_set` distinguishes these cases).
+
+Because royalty flows through `_split_credit`, every resale continues to
+pay whatever co-author basis points were configured for the work. A
+30-hop resale chain still pays every original co-author their share
+without any off-chain enforcement.
+
 ## Formulas
 
 | Event                                     | Effect                              |
@@ -158,6 +199,9 @@ is a dry-run that tells the frontend WHY a takedown is not yet callable
 | `fund_bounty` (v9, anyone)                | `bounty_pool[work_id] += msg.value`; contributor entry created/aggregated |
 | First honest INFRINGEMENT (Path B, off-watchlist) | `payout = max(1, bounty_pool * tier_pct // 100)` capped at pool; scanner balance += payout |
 | First honest INFRINGEMENT on watchlisted URL (v9) | payout above × 2, still capped by remaining pool |
+| `transfer_license` (v10)                  | license record moved seller→buyer (no wei moved); prior seller listing auto-cancelled |
+| `list_for_resale` (v10)                   | (no wei moved) — records ask price + marks listing active |
+| `buy_from_resale` (v10)                   | royalty = `ask * bps // 10000` → `_split_credit(work_id)`; proceeds = `ask - royalty` → seller; overpay refunded to buyer |
 | Repeat INFRINGEMENT on same canonical URL | no payout (`already_credited=true`) |
 | INFRINGEMENT via URL shortcut (Path A)    | no payout (`registered_url_shortcut=true`) |
 | `withdraw()`                              | drains sender's `withdrawable_balance` |
