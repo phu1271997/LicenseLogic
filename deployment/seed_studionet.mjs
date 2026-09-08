@@ -9,7 +9,7 @@
 //
 // Flags:
 //   --addr=<0x...>      Override the contract address (else uses FALLBACK_ADDRESS).
-//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy|tier|coauthors|buy-tier|community-bounty|watchlist|scan-watched|takedown
+//   --step=all|register|anchor|scan-infr|scan-clear|bounty|buy|tier|coauthors|buy-tier|community-bounty|watchlist|scan-watched|takedown|transferable-tier|list-resale|buy-resale
 //                        Run a single stage instead of the full sequence.
 //
 // Outputs:
@@ -261,6 +261,73 @@ async function main() {
       ownerClient,
       "takedown_ready",
       [workId, REG_URL],
+    );
+  }
+
+  // v10 — mark the commercial-30d tier transferable + drop royalty to 500 bps.
+  if (STEP === "all" || STEP === "transferable-tier") {
+    await write(
+      "make-tier-transferable",
+      ownerClient,
+      "set_tier_transferable",
+      [workId, 1, true],
+    );
+    await write(
+      "set-royalty",
+      ownerClient,
+      "set_resale_royalty_bps",
+      [workId, 500n], // 5 %
+    );
+    await read(
+      "royalty",
+      ownerClient,
+      "get_resale_royalty_bps",
+      [workId],
+    );
+  }
+
+  // v10 — buyer (who already holds tier_1 from the buy-tier step) lists it.
+  if (STEP === "all" || STEP === "list-resale") {
+    const buyerPk = loadOrCreatePk(BUYER_PK_FILE);
+    const { account: buyer, client: buyerClient } = makeClient(buyerPk);
+    console.log(`buyer:    ${buyer.address}`);
+    await write("list-resale", buyerClient, "list_for_resale", [
+      workId,
+      2500n, // ask price
+    ]);
+    await read(
+      "listings",
+      ownerClient,
+      "list_resale_listings",
+      [workId],
+    );
+  }
+
+  // v10 — a fresh secondary buyer picks up the listing.
+  if (STEP === "all" || STEP === "buy-resale") {
+    const buyerPk = loadOrCreatePk(BUYER_PK_FILE);
+    const secondaryPk = loadOrCreatePk(path.resolve(".seed_secondary_pk"));
+    const { account: buyer } = makeClient(buyerPk);
+    const { account: secondary, client: secondaryClient } = makeClient(secondaryPk);
+    console.log(`secondary: ${secondary.address}`);
+    await write(
+      "buy-resale",
+      secondaryClient,
+      "buy_from_resale",
+      [workId, buyer.address],
+      2500n,
+    );
+    await read(
+      "get-license-secondary",
+      ownerClient,
+      "get_license",
+      [workId, secondary.address],
+    );
+    await read(
+      "listings-after",
+      ownerClient,
+      "list_resale_listings",
+      [workId],
     );
   }
 
