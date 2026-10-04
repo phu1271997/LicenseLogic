@@ -453,6 +453,8 @@ class Contract(gl.Contract):
     # v9 — On-chain takedown notice registry (keyed by verdict_key).
     takedown_notice: TreeMap[str, str]                        # verdict_key -> notice JSON
     takedown_issued_at: TreeMap[str, u256]                    # verdict_key -> epoch
+    # v10 fix — a takedown issued before a later appeal must reflect an overturn.
+    takedown_revoked: TreeMap[str, bool]                      # verdict_key -> True once a post-notice appeal overturns it
     # v9 — epoch at which a verdict was written (used for takedown grace).
     verdict_epoch: TreeMap[str, u256]                         # verdict_key -> epoch
     # v10 — Secondary market: transferable licenses + resale listings + royalty.
@@ -748,11 +750,20 @@ class Contract(gl.Contract):
             return "already_licensed"
 
         # v8 — route via tier_0 with royalty splits.
+        # v10 fix — default-tier deactivation blocks BOTH purchase paths. When
+        # the work has tiers (always true for register_work-created works) and
+        # tier_0 has been deactivated, the legacy purchase must refuse exactly
+        # like purchase_license_tier does, instead of silently falling back to
+        # the legacy license_price and selling a disabled offer.
         tier_key = f"{work_id}:0"
         n_tiers = int(self.license_tiers_count.get(work_id, u256(0)))
-        if n_tiers == 0 or not self.tier_active.get(tier_key, False):
+        if n_tiers == 0:
             price = int(self.license_price.get(work_id, u256(0)))
         else:
+            if not self.tier_active.get(tier_key, False):
+                raise gl.vm.UserError(
+                    "Default tier is deactivated — purchase unavailable"
+                )
             price = int(self.tier_price.get(tier_key, u256(0)))
         if int(gl.message.value) < price:
             raise gl.vm.UserError(
@@ -840,12 +851,34 @@ class Contract(gl.Contract):
         duration = int(self.tier_duration_epochs.get(tier_key, u256(0)))
         current_epoch = int(self.epoch)
         license_key = self._license_key(work_id, buyer)
+
+        # v10 fix — cross-tier renewal is defined and enforced. Time bought under
+        # one offer must never silently roll into a different offer:
+        #   - holder renews the SAME tier  -> extend / stack the expiry.
+        #   - holder with a still-ACTIVE license on a DIFFERENT tier -> REVERT,
+        #     so the cheap-long balance can't be relabelled as an expensive-short
+        #     tier (or vice-versa). Switch only after the current term lapses.
+        #   - holder whose license already EXPIRED -> treated as a fresh buy on
+        #     the requested tier (starts from the current epoch; no dead time
+        #     carried over). This is the only way to switch tiers.
+        # This validation runs BEFORE any funds move, so a rejected cross-tier
+        # renewal leaves ownership, royalty credits and balances untouched.
+        held = self.licensees.get(license_key, ZERO_ADDR) != ZERO_ADDR
+        current_tier = int(self.license_tier_idx.get(license_key, u256(0)))
+        old_exp = int(self.license_expires_at.get(license_key, u256(0)))
+        still_active = held and ((old_exp == 0) or (current_epoch < old_exp))
+        if still_active and current_tier != idx:
+            raise gl.vm.UserError(
+                f"Active license is on tier {current_tier}; renew that tier to "
+                f"extend it, or wait for it to expire before switching to tier "
+                f"{idx} (cross-tier renewal would silently convert bought time)"
+            )
+
         self.total_received = checked_add(self.total_received, int(gl.message.value))
         self._split_credit(work_id, gl.message.value)
 
-        if self.licensees.get(license_key, ZERO_ADDR) != ZERO_ADDR:
-            # Renew / extend.
-            old_exp = int(self.license_expires_at.get(license_key, u256(0)))
+        if still_active:
+            # Same-tier renew / extend (guaranteed current_tier == idx here).
             if duration == 0:
                 new_exp = 0
             else:
@@ -863,6 +896,8 @@ class Contract(gl.Contract):
                 sort_keys=True,
             )
 
+        # Fresh purchase, OR an expired license being switched to a new tier:
+        # overwrite cleanly and start the term from the current epoch.
         self.licensees[license_key] = buyer
         self.license_tier_idx[license_key] = u256(idx)
         self.license_purchased_at[license_key] = u256(current_epoch)
@@ -1434,6 +1469,11 @@ class Contract(gl.Contract):
                 cur_h = self.scanner_honest.get(scanner_str, u256(0))
                 if int(cur_h) > 0:
                     self.scanner_honest[scanner_str] = checked_sub(cur_h, 1)
+            # v10 fix — if a takedown notice was already issued for this verdict,
+            # a later overturn must revoke it. The notice string itself is kept
+            # immutable (chain of custody), but reads now surface revoked=true.
+            if self.takedown_notice.get(verdict_key, ""):
+                self.takedown_revoked[verdict_key] = True
         else:
             outcome = "UPHELD"
             self.appeal_state[verdict_key] = APPEAL_UPHELD
@@ -1565,6 +1605,22 @@ class Contract(gl.Contract):
         self.watchlist_active[f"{work_id}:{idx}"] = active
         return active
 
+    def _render_takedown(self, verdict_key: str, notice: str) -> str:
+        """Return the stored notice, augmented with revocation metadata when a
+        later appeal overturned the verdict. The stored string stays immutable;
+        only reads reflect the overturn.
+        """
+        if not bool(self.takedown_revoked.get(verdict_key, False)):
+            return notice
+        try:
+            obj = json.loads(notice)
+        except (json.JSONDecodeError, TypeError):
+            obj = {"raw": notice}
+        obj["revoked"] = True
+        obj["revoked_reason"] = "appeal_overturned"
+        obj["current_appeal_state"] = self.appeal_state.get(verdict_key, "")
+        return json.dumps(obj, sort_keys=True)
+
     @gl.public.write
     def issue_takedown_notice(self, work_id: str, suspect_url: str) -> str:
         """v9 — anyone can issue a takedown notice AFTER an INFRINGEMENT
@@ -1590,7 +1646,7 @@ class Contract(gl.Contract):
 
         existing = self.takedown_notice.get(verdict_key, "")
         if existing:
-            return existing
+            return self._render_takedown(verdict_key, existing)
 
         record_raw = self.last_verdict.get(verdict_key, "")
         if not record_raw:
@@ -1779,6 +1835,13 @@ class Contract(gl.Contract):
         seller_key = self._license_key(work_id, seller)
         if self.licensees.get(seller_key, ZERO_ADDR) == ZERO_ADDR:
             raise gl.vm.UserError("You do not hold a license on this work")
+        # v10 fix — refuse to hand off an already-expired license; there is no
+        # live right to move.
+        seller_exp = int(self.license_expires_at.get(seller_key, u256(0)))
+        if seller_exp != 0 and int(self.epoch) >= seller_exp:
+            raise gl.vm.UserError(
+                "Your license has expired — cannot transfer"
+            )
 
         try:
             buyer = Address(to)
@@ -1836,6 +1899,13 @@ class Contract(gl.Contract):
         seller_key = self._license_key(work_id, seller)
         if self.licensees.get(seller_key, ZERO_ADDR) == ZERO_ADDR:
             raise gl.vm.UserError("You do not hold a license on this work")
+        # v10 fix — the license must still be ACTIVE at listing time. An expired
+        # license carries no rights to sell.
+        seller_exp = int(self.license_expires_at.get(seller_key, u256(0)))
+        if seller_exp != 0 and int(self.epoch) >= seller_exp:
+            raise gl.vm.UserError(
+                "Your license has expired — cannot list for resale"
+            )
         tier_idx = int(self.license_tier_idx.get(seller_key, u256(0)))
         if not self.tier_transferable.get(
             f"{work_id}:{tier_idx}", False
@@ -1908,6 +1978,22 @@ class Contract(gl.Contract):
             self.resale_ask_price[seller_key] = u256(0)
             raise gl.vm.UserError(
                 "Listing seller no longer holds the license (listing closed)"
+            )
+
+        # v10 fix — re-validate at PURCHASE time, not just at listing time. The
+        # owner may have turned the tier's transferability OFF, or the listed
+        # license may have EXPIRED, after the listing went up. In either case the
+        # sale must refuse before any funds move so the seller keeps the license
+        # and no balances change.
+        listed_tier = int(self.license_tier_idx.get(seller_key, u256(0)))
+        if not self.tier_transferable.get(f"{work_id}:{listed_tier}", False):
+            raise gl.vm.UserError(
+                f"Tier {listed_tier} is no longer transferable — resale blocked"
+            )
+        seller_exp = int(self.license_expires_at.get(seller_key, u256(0)))
+        if seller_exp != 0 and int(self.epoch) >= seller_exp:
+            raise gl.vm.UserError(
+                "Listed license has expired — resale blocked"
             )
 
         if int(gl.message.value) < ask:
@@ -2148,7 +2234,16 @@ class Contract(gl.Contract):
                 {"issued": False, "verdict_key": verdict_key},
                 sort_keys=True,
             )
-        return notice
+        return self._render_takedown(verdict_key, notice)
+
+    @gl.public.view
+    def is_takedown_revoked(self, work_id: str, suspect_url: str) -> bool:
+        """v10 — True when a takedown notice was issued and a later appeal
+        overturned the underlying verdict.
+        """
+        canonical = canonical_url(normalise_url(suspect_url))
+        verdict_key = f"{work_id}:{deterministic_hash(canonical)}"
+        return bool(self.takedown_revoked.get(verdict_key, False))
 
     @gl.public.view
     def takedown_ready(self, work_id: str, suspect_url: str) -> str:
