@@ -125,6 +125,9 @@ interface TakedownNotice {
   revoked?: boolean; // v10 — a later appeal overturned the verdict
   revoked_reason?: string;
   current_appeal_state?: string;
+  status?: string; // v10.2 — active | under_appeal | revoked | upheld_on_appeal
+  challenged?: boolean;
+  still_enforceable?: boolean;
 }
 
 interface Perspectives {
@@ -3132,6 +3135,7 @@ function TakedownPanel({
   }
   const alreadyIssued = !!notice;
   const revoked = !!notice?.revoked;
+  const underAppeal = notice?.status === "under_appeal";
   const readyNow = ready?.ready;
   const reason = ready?.reason || "";
 
@@ -3148,6 +3152,8 @@ function TakedownPanel({
           className={`text-[10px] px-2 py-0.5 rounded-full border font-mono ${
             revoked
               ? "bg-orange-500/10 border-orange-500/30 text-orange-300"
+              : underAppeal
+              ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
               : alreadyIssued
               ? "bg-red-500/10 border-red-500/30 text-red-300"
               : readyNow
@@ -3157,6 +3163,8 @@ function TakedownPanel({
         >
           {revoked
             ? "revoked (appeal overturned)"
+            : underAppeal
+            ? "under appeal (challenged)"
             : alreadyIssued
             ? "issued"
             : readyNow
@@ -3170,6 +3178,14 @@ function TakedownPanel({
           This takedown notice was <b>revoked</b> — a later appeal overturned the
           underlying verdict. The notice record stays on-chain for provenance,
           but it no longer stands as a valid infringement claim.
+        </div>
+      )}
+
+      {underAppeal && (
+        <div className="p-3 rounded-lg text-xs bg-amber-500/10 border border-amber-500/30 text-amber-200">
+          A later appeal is <b>pending</b> against this verdict. Until it
+          resolves, the notice is <b>not enforceable</b> and must not be treated
+          as unchallenged infringement.
         </div>
       )}
 
