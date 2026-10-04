@@ -43,7 +43,7 @@ Prerequisites:
 - If you want to see a fully-populated record before doing anything: `work_1` is already anchored and has an INFRINGEMENT verdict plus a CLEAR verdict on file. Open the **Browse Works** tab to confirm.
 
 Step 1 — Browse existing records.
-Open <https://license-logic.vercel.app> → click **Browse Works**. You should see three works. `work_1` is tagged `anchored` and shows `1 infringement(s)`.
+Open <https://license-logic-app-lovat.vercel.app> → click **Browse Works**. You should see three works. `work_1` is tagged `anchored` and shows `1 infringement(s)`.
 
 Step 2 — Inspect the seeded record.
 Switch to **View Work**, enter `work_1`, submit. You will see the anchor summary (a paragraph-long LLM-consensus description of the reference page), the license price, penalty, and bounty pool.
@@ -84,7 +84,7 @@ Reference tx hashes on studionet (from the 2026-08-25 seeding pass, all reached 
 - purchase license work_1: `0xc09a26f7c9b40b85a66662f29d09a95c8f01d3e4828471ef5d4428de783bb705`
 
 ## Website
-<https://license-logic.vercel.app>
+<https://license-logic-app-lovat.vercel.app>
 
 ## GitHub
 <https://github.com/phu1271997/LicenseLogic>

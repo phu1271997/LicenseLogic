@@ -6,17 +6,17 @@ The project lets creators register original works, sell usage licenses, and scan
 
 ## Current Status
 
-- Contract compiled and tested against GenVM v0.2.16 (`66 passed, 1 skipped`)
+- Contract compiled and tested against GenVM v0.2.16 (`150 passed, 1 skipped`)
 - Reviewer-flagged runtime bugs fixed (see [CHANGELOG.md](CHANGELOG.md))
 - Studionet deployment (v10.1 secondary-market + takedown fixes): [`0x3084A48279a204c747B02d26fD0CC73F9a880f5D`](https://explorer-studio.genlayer.com/address/0x3084A48279a204c747B02d26fD0CC73F9a880f5D)
-- Live frontend: [https://license-logic.vercel.app](https://license-logic.vercel.app)
+- Live frontend: [https://license-logic-app-lovat.vercel.app](https://license-logic-app-lovat.vercel.app)
 - Explorer submission draft: [SUBMISSION.md](SUBMISSION.md)
 
 ## Try It Now
 
 The frontend spins up an auto-funded studionet burner per browser tab — no wallet install required.
 
-1. Open <https://license-logic-app.vercel.app> → **Browse Works**. Contract v10.1 Secondary Market live at `0x3084A48279a204c747B02d26fD0CC73F9a880f5D` on studionet.
+1. Open <https://license-logic-app-lovat.vercel.app> → **Browse Works**. Contract v10.1 Secondary Market live at `0x3084A48279a204c747B02d26fD0CC73F9a880f5D` on studionet.
 2. **View Work** `work_1` — see the LLM-consensus anchor summary of `docs.genlayer.com`.
 3. **Scan Infringement** `work_1` vs `https://example.com/` → CLEAR verdict with validator reasoning; vs `https://docs.genlayer.com/` → INFRINGEMENT via the non-payable registered-URL shortcut.
 4. **Purchase License** `work_1`, amount `1000` — you now hold a license.
@@ -46,7 +46,7 @@ python3 -m venv .venv
 Latest local result:
 
 ```text
-66 passed, 1 skipped
+150 passed, 1 skipped
 ```
 
 ## Reproducible Lint
