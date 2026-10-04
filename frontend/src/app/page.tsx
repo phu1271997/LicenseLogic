@@ -122,6 +122,9 @@ interface TakedownNotice {
   issuer?: string;
   anchor_summary?: string;
   issued?: boolean; // present only on the "no notice yet" wrapper
+  revoked?: boolean; // v10 — a later appeal overturned the verdict
+  revoked_reason?: string;
+  current_appeal_state?: string;
 }
 
 interface Perspectives {
@@ -3128,6 +3131,7 @@ function TakedownPanel({
     return null;
   }
   const alreadyIssued = !!notice;
+  const revoked = !!notice?.revoked;
   const readyNow = ready?.ready;
   const reason = ready?.reason || "";
 
@@ -3142,16 +3146,32 @@ function TakedownPanel({
         </p>
         <span
           className={`text-[10px] px-2 py-0.5 rounded-full border font-mono ${
-            alreadyIssued
+            revoked
+              ? "bg-orange-500/10 border-orange-500/30 text-orange-300"
+              : alreadyIssued
               ? "bg-red-500/10 border-red-500/30 text-red-300"
               : readyNow
                 ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
                 : "bg-yellow-500/10 border-yellow-500/30 text-yellow-200"
           }`}
         >
-          {alreadyIssued ? "issued" : readyNow ? "ready" : reason || "pending"}
+          {revoked
+            ? "revoked (appeal overturned)"
+            : alreadyIssued
+            ? "issued"
+            : readyNow
+            ? "ready"
+            : reason || "pending"}
         </span>
       </div>
+
+      {revoked && (
+        <div className="p-3 rounded-lg text-xs bg-orange-500/10 border border-orange-500/30 text-orange-200">
+          This takedown notice was <b>revoked</b> — a later appeal overturned the
+          underlying verdict. The notice record stays on-chain for provenance,
+          but it no longer stands as a valid infringement claim.
+        </div>
+      )}
 
       {alreadyIssued && notice && (
         <div className="p-3 gl-card rounded-lg space-y-2 text-xs">
