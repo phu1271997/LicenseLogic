@@ -295,6 +295,60 @@ def test_takedown_reissue_is_idempotent(
     assert first == second
 
 
+def test_takedown_then_appeal_overturn_revokes_notice(
+    anchored_work, direct_vm, direct_alice, direct_bob, direct_owner
+):
+    """Regression — notice issuance FOLLOWED BY an appeal that overturns it.
+
+    A takedown issued while a verdict stood must not keep reading as a valid,
+    standing notice once a later appeal overturns the verdict. The stored
+    notice stays immutable (chain of custody), but reads now surface
+    revoked=true.
+    """
+    contract, work_id = anchored_work
+    _drive_infringement(contract, direct_vm, direct_alice)
+
+    # Grace window elapses, then the notice is issued (no appeal yet).
+    direct_vm.sender = direct_owner
+    direct_vm.value = 0
+    for _ in range(26):
+        contract.set_scans_disabled(work_id, False)
+    notice = json.loads(
+        contract.issue_takedown_notice(work_id, "https://example.com/dupe")
+    )
+    assert notice["verdict"] == "INFRINGEMENT"
+    assert "revoked" not in notice
+    assert contract.is_takedown_revoked(work_id, "https://example.com/dupe") is False
+
+    # A party appeals AFTER the notice is already on-chain, and wins.
+    direct_vm.sender = direct_bob
+    direct_vm.value = 50  # penalty=25 → stake=2*penalty=50
+    contract.file_appeal(work_id, "https://example.com/dupe")
+
+    direct_vm.mock_web(
+        "example.com/dupe",
+        {"status": 200, "body": "<html>near-verbatim copy of original</html>"},
+    )
+    direct_vm.mock_llm(
+        "appeals adjudicator",
+        json.dumps({"outcome": "OVERTURNED", "similarity": 25, "reasoning": "fair use"}),
+    )
+    direct_vm.value = 0
+    contract.resolve_appeal(work_id, "https://example.com/dupe")
+
+    # The notice now reflects the overturn.
+    assert contract.is_takedown_revoked(work_id, "https://example.com/dupe") is True
+    revoked = json.loads(
+        contract.get_takedown_notice(work_id, "https://example.com/dupe")
+    )
+    assert revoked["revoked"] is True
+    assert revoked["revoked_reason"] == "appeal_overturned"
+    assert revoked["current_appeal_state"] == "overturned"
+    # Immutable provenance fields survive.
+    assert revoked["verdict"] == "INFRINGEMENT"
+    assert revoked["work_id"] == work_id
+
+
 def test_takedown_blocked_by_overturned_appeal(
     anchored_work, direct_vm, direct_alice, direct_bob, direct_owner
 ):

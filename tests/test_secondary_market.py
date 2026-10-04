@@ -401,6 +401,143 @@ def test_list_resale_listings_filters_closed(
     assert listings["listings"][0]["ask_price"] == 700
 
 
+def _add_short_transferable_tier(
+    contract, work_id, direct_vm, direct_owner, price=1000, dur=3
+):
+    direct_vm.sender = direct_owner
+    idx = int(contract.add_license_tier(work_id, "short-transferable", price, dur))
+    contract.set_tier_transferable(work_id, idx, True)
+    return idx
+
+
+def _burn_epochs(contract, direct_vm, direct_owner, work_id, n):
+    """Tick the global epoch with cheap owner-only writes."""
+    direct_vm.sender = direct_owner
+    direct_vm.value = 0
+    for _ in range(n):
+        contract.set_scans_disabled(work_id, False)
+
+
+# ────────────────────────────────────────────────────────────────
+# v10 reviewer fixes — re-check active + transferable at list / transfer /
+# purchase time; a refusal must leave ownership + balances unchanged.
+# ────────────────────────────────────────────────────────────────
+
+
+def test_buy_from_resale_blocked_when_tier_disabled_after_listing(
+    registered_work, direct_vm, direct_owner, direct_alice, direct_bob
+):
+    contract, work_id = registered_work
+    idx = _add_transferable_tier(contract, work_id, direct_vm, direct_owner)
+    _buy_tier(contract, work_id, direct_alice, idx, direct_vm)
+
+    direct_vm.sender = direct_alice
+    direct_vm.value = 0
+    contract.list_for_resale(work_id, 2000)
+
+    # Owner revokes transferability AFTER the listing is up.
+    direct_vm.sender = direct_owner
+    contract.set_tier_transferable(work_id, idx, False)
+
+    owner_before = int(contract.get_withdrawable(addr_hex(direct_owner)))
+    alice_before = int(contract.get_withdrawable(addr_hex(direct_alice)))
+
+    direct_vm.sender = direct_bob
+    direct_vm.value = 2000
+    with pytest.raises(Exception) as exc:
+        contract.buy_from_resale(work_id, addr_hex(direct_alice))
+    assert "transferable" in str(exc.value).lower()
+
+    # Ownership + royalty credits + balances all unchanged.
+    assert (
+        json.loads(contract.get_license(work_id, addr_hex(direct_alice)))["has_license"]
+        is True
+    )
+    assert (
+        json.loads(contract.get_license(work_id, addr_hex(direct_bob)))["has_license"]
+        is False
+    )
+    assert int(contract.get_withdrawable(addr_hex(direct_owner))) == owner_before
+    assert int(contract.get_withdrawable(addr_hex(direct_alice))) == alice_before
+    assert int(contract.get_withdrawable(addr_hex(direct_bob))) == 0
+
+
+def test_buy_from_resale_blocked_when_listing_expired(
+    registered_work, direct_vm, direct_owner, direct_alice, direct_bob
+):
+    contract, work_id = registered_work
+    idx = _add_short_transferable_tier(contract, work_id, direct_vm, direct_owner)
+    _buy_tier(contract, work_id, direct_alice, idx, direct_vm)
+
+    direct_vm.sender = direct_alice
+    direct_vm.value = 0
+    contract.list_for_resale(work_id, 2000)
+
+    # Let the license lapse while the listing is still up.
+    _burn_epochs(contract, direct_vm, direct_owner, work_id, 5)
+    assert contract.has_license(work_id, addr_hex(direct_alice)) is False
+
+    owner_before = int(contract.get_withdrawable(addr_hex(direct_owner)))
+    alice_before = int(contract.get_withdrawable(addr_hex(direct_alice)))
+
+    direct_vm.sender = direct_bob
+    direct_vm.value = 2000
+    with pytest.raises(Exception) as exc:
+        contract.buy_from_resale(work_id, addr_hex(direct_alice))
+    assert "expired" in str(exc.value).lower()
+
+    # Seller still holds the (expired) record; buyer got nothing; no money moved.
+    assert (
+        json.loads(contract.get_license(work_id, addr_hex(direct_alice)))["has_license"]
+        is True
+    )
+    assert (
+        json.loads(contract.get_license(work_id, addr_hex(direct_bob)))["has_license"]
+        is False
+    )
+    assert int(contract.get_withdrawable(addr_hex(direct_owner))) == owner_before
+    assert int(contract.get_withdrawable(addr_hex(direct_alice))) == alice_before
+    assert int(contract.get_withdrawable(addr_hex(direct_bob))) == 0
+
+
+def test_list_for_resale_blocked_when_expired(
+    registered_work, direct_vm, direct_owner, direct_alice
+):
+    contract, work_id = registered_work
+    idx = _add_short_transferable_tier(contract, work_id, direct_vm, direct_owner)
+    _buy_tier(contract, work_id, direct_alice, idx, direct_vm)
+
+    _burn_epochs(contract, direct_vm, direct_owner, work_id, 5)
+    assert contract.has_license(work_id, addr_hex(direct_alice)) is False
+
+    direct_vm.sender = direct_alice
+    direct_vm.value = 0
+    with pytest.raises(Exception) as exc:
+        contract.list_for_resale(work_id, 2000)
+    assert "expired" in str(exc.value).lower()
+
+
+def test_transfer_blocked_when_expired(
+    registered_work, direct_vm, direct_owner, direct_alice, direct_bob
+):
+    contract, work_id = registered_work
+    idx = _add_short_transferable_tier(contract, work_id, direct_vm, direct_owner)
+    _buy_tier(contract, work_id, direct_alice, idx, direct_vm)
+
+    _burn_epochs(contract, direct_vm, direct_owner, work_id, 5)
+    assert contract.has_license(work_id, addr_hex(direct_alice)) is False
+
+    direct_vm.sender = direct_alice
+    direct_vm.value = 0
+    with pytest.raises(Exception) as exc:
+        contract.transfer_license(work_id, addr_hex(direct_bob))
+    assert "expired" in str(exc.value).lower()
+    assert (
+        json.loads(contract.get_license(work_id, addr_hex(direct_bob)))["has_license"]
+        is False
+    )
+
+
 def test_cancel_resale_requires_active_listing(
     registered_work, direct_vm, direct_owner, direct_alice
 ):
