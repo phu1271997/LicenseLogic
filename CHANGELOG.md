@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 2026-10-04 — Reviewer fixes (v10.2, redeploy)
+
+Contract v10.2 — strengthens the takedown/appeal fix after the reviewer
+re-raised it. New studionet address
+`0x2FE1B8C8c0E47a2a40F114f4e3cD8A6F817C8410`
+(tx `0xe6f9317489c8f018fa52fca6ff502e4d8b640e54ed0e2673675f473c50478bbd`).
+
+### Takedown notices reflect the verdict's LIVE challenge status
+
+- Previously a notice only flipped to `revoked` once a later appeal was
+  *resolved* as OVERTURNED. While an appeal was merely **pending**, the notice
+  still read as a standing, unchallenged infringement claim — the gap the
+  reviewer flagged.
+- `get_takedown_notice` (and the fresh `issue_takedown_notice` return) now carry
+  the live state on every read:
+  - `status`: `active` | `under_appeal` | `revoked` | `upheld_on_appeal`
+  - `current_appeal_state`, `challenged`, `still_enforceable`, `revoked`
+  The stored notice string stays immutable (chain of custody); only the derived
+  status changes.
+- New view `get_takedown_status(work_id, suspect_url)` returns the one-word
+  status (adds `not_issued`) so the app can gate enforceability without parsing
+  the whole notice.
+- Frontend `TakedownPanel` now shows an **"under appeal (challenged)"** state
+  with a "not enforceable" banner, in addition to the revoked state.
+- Regression test (`tests/test_watchtower.py`): issue a notice → file a
+  **permitted** later appeal (asserts `under_appeal` + `still_enforceable=false`)
+  → overturn it (asserts `revoked`). Proves neither the public notice nor the
+  app can present the ruling as unchallenged infringement once challenged.
+
+Carries forward every v10.1 fix below unchanged.
+
 ## 2026-10-04 — Reviewer fixes (v10.1, redeploy)
 
 Contract v10.1 — addresses the reviewer feedback on the cumulative v10

@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x2FE1B8C8c0E47a2a40F114f4e3cD8A6F817C8410",
+    "deployed_at": "2026-10-04T12:00:00+07:00",
+    "deployment_tx_hash": "0xe6f9317489c8f018fa52fca6ff502e4d8b640e54ed0e2673675f473c50478bbd",
+    "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v10.2 — strengthens the takedown/appeal reviewer fix. A takedown notice now reflects its verdict's LIVE challenge status, not only a final overturn: get_takedown_notice + new get_takedown_status view return status active | under_appeal | revoked | upheld_on_appeal, plus challenged / still_enforceable / revoked flags, so neither the public notice nor the app can present a still-under-appeal or overturned verdict as unchallenged infringement. Regression test covers issue -> permitted later appeal (pending -> under_appeal, not enforceable) -> overturn (revoked). Carries forward all v10.1 fixes (license-state guards, default-tier deactivation on both purchase methods, enforced cross-tier renewal). See CHANGELOG.md 2026-10-04 (v10.2) section."
+  },
+  "studionet_previous_v10_1": {
     "contract_address": "0x3084A48279a204c747B02d26fD0CC73F9a880f5D",
     "deployed_at": "2026-10-04T00:00:00+07:00",
     "deployment_tx_hash": "0xc3ed58b855eb3eb3d5b529a0df34a48f554ce8cd9693eba42f95658912b55064",
     "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
     "abi_hash": "PENDING_FILL",
-    "notes": "v10.1 — reviewer-fix release on top of v10 Secondary Market. (1) list_for_resale / transfer_license / buy_from_resale now re-check the seller license is still ACTIVE and the tier still transferable at list, transfer AND purchase time, before moving any rights or funds. (2) Default-tier (tier_0) deactivation now blocks BOTH purchase_license (legacy) and purchase_license_tier — no silent fallback sale. (3) Cross-tier renewal is defined + enforced: same-tier renews/stacks, a still-active license on a different tier REVERTS (no silent re-labelling of bought time), expired licenses may switch tier as a fresh buy. (4) A takedown notice issued before a later appeal now reflects an overturn (takedown_revoked + is_takedown_revoked view; get_takedown_notice surfaces revoked=true). +16 contract tests. See CHANGELOG.md 2026-10-04 section."
+    "notes": "v10.1 — reviewer-fix release (license-state guards at list/transfer/purchase; default-tier deactivation on both purchase methods; enforced cross-tier renewal; takedown reflects a later appeal overturn). Superseded by v10.2, which also reflects pending appeals."
   },
   "studionet_previous_v10": {
     "contract_address": "0x476Ee007F9bd26b33a5707dB364d7b1D469e86a5",
