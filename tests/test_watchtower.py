@@ -298,13 +298,14 @@ def test_takedown_reissue_is_idempotent(
 def test_takedown_then_appeal_overturn_revokes_notice(
     anchored_work, direct_vm, direct_alice, direct_bob, direct_owner
 ):
-    """Regression — notice issuance FOLLOWED BY an appeal that overturns it.
+    """Regression — issue a notice, file a PERMITTED later appeal, overturn it.
 
-    A takedown issued while a verdict stood must not keep reading as a valid,
-    standing notice once a later appeal overturns the verdict. The stored
-    notice stays immutable (chain of custody), but reads now surface
-    revoked=true.
+    Proves the public notice and the app can never still present the ruling as
+    unchallenged infringement: the notice reflects the pending appeal the
+    moment it is filed, and the overturn once it resolves. The stored notice
+    string stays immutable (chain of custody); only the live status changes.
     """
+    url = "https://example.com/dupe"
     contract, work_id = anchored_work
     _drive_infringement(contract, direct_vm, direct_alice)
 
@@ -313,18 +314,28 @@ def test_takedown_then_appeal_overturn_revokes_notice(
     direct_vm.value = 0
     for _ in range(26):
         contract.set_scans_disabled(work_id, False)
-    notice = json.loads(
-        contract.issue_takedown_notice(work_id, "https://example.com/dupe")
-    )
+    notice = json.loads(contract.issue_takedown_notice(work_id, url))
     assert notice["verdict"] == "INFRINGEMENT"
-    assert "revoked" not in notice
-    assert contract.is_takedown_revoked(work_id, "https://example.com/dupe") is False
+    assert notice["status"] == "active"
+    assert notice["still_enforceable"] is True
+    assert notice["challenged"] is False
+    assert notice["revoked"] is False
+    assert contract.get_takedown_status(work_id, url) == "active"
 
-    # A party appeals AFTER the notice is already on-chain, and wins.
+    # A party files a PERMITTED later appeal AFTER the notice is on-chain.
     direct_vm.sender = direct_bob
     direct_vm.value = 50  # penalty=25 → stake=2*penalty=50
-    contract.file_appeal(work_id, "https://example.com/dupe")
+    contract.file_appeal(work_id, url)
 
+    # The notice must immediately stop reading as unchallenged infringement.
+    pending = json.loads(contract.get_takedown_notice(work_id, url))
+    assert pending["status"] == "under_appeal"
+    assert pending["challenged"] is True
+    assert pending["still_enforceable"] is False
+    assert pending["current_appeal_state"] == "pending"
+    assert contract.get_takedown_status(work_id, url) == "under_appeal"
+
+    # The appeal is resolved in the appellant's favour (verdict overturned).
     direct_vm.mock_web(
         "example.com/dupe",
         {"status": 200, "body": "<html>near-verbatim copy of original</html>"},
@@ -334,14 +345,15 @@ def test_takedown_then_appeal_overturn_revokes_notice(
         json.dumps({"outcome": "OVERTURNED", "similarity": 25, "reasoning": "fair use"}),
     )
     direct_vm.value = 0
-    contract.resolve_appeal(work_id, "https://example.com/dupe")
+    contract.resolve_appeal(work_id, url)
 
-    # The notice now reflects the overturn.
-    assert contract.is_takedown_revoked(work_id, "https://example.com/dupe") is True
-    revoked = json.loads(
-        contract.get_takedown_notice(work_id, "https://example.com/dupe")
-    )
+    # The notice now reflects the overturn and is no longer enforceable.
+    assert contract.is_takedown_revoked(work_id, url) is True
+    assert contract.get_takedown_status(work_id, url) == "revoked"
+    revoked = json.loads(contract.get_takedown_notice(work_id, url))
+    assert revoked["status"] == "revoked"
     assert revoked["revoked"] is True
+    assert revoked["still_enforceable"] is False
     assert revoked["revoked_reason"] == "appeal_overturned"
     assert revoked["current_appeal_state"] == "overturned"
     # Immutable provenance fields survive.

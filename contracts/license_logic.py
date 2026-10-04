@@ -1605,20 +1605,47 @@ class Contract(gl.Contract):
         self.watchlist_active[f"{work_id}:{idx}"] = active
         return active
 
-    def _render_takedown(self, verdict_key: str, notice: str) -> str:
-        """Return the stored notice, augmented with revocation metadata when a
-        later appeal overturned the verdict. The stored string stays immutable;
-        only reads reflect the overturn.
+    def _takedown_status(self, verdict_key: str) -> str:
+        """Live challenge status of a takedown's underlying verdict.
+
+        Reflects BOTH a still-pending later appeal and a resolved one, so the
+        notice can never be read as unchallenged while an appeal is in flight
+        or after it has overturned the verdict.
+          - revoked          : a later appeal OVERTURNED the verdict
+          - under_appeal     : a later appeal is PENDING
+          - upheld_on_appeal : a later appeal was resolved UPHELD
+          - active           : no later appeal
         """
-        if not bool(self.takedown_revoked.get(verdict_key, False)):
-            return notice
+        state = self.appeal_state.get(verdict_key, "") or "none"
+        if bool(self.takedown_revoked.get(verdict_key, False)) or state == APPEAL_OVERTURNED:
+            return "revoked"
+        if state == APPEAL_PENDING:
+            return "under_appeal"
+        if state == APPEAL_UPHELD:
+            return "upheld_on_appeal"
+        return "active"
+
+    def _render_takedown(self, verdict_key: str, notice: str) -> str:
+        """Return the stored notice augmented with its LIVE challenge status.
+
+        The stored notice string stays immutable (chain of custody); every read
+        surfaces the current appeal state so neither the public notice nor the
+        app can present an overturned — or still-under-appeal — verdict as
+        unchallenged infringement.
+        """
         try:
             obj = json.loads(notice)
         except (json.JSONDecodeError, TypeError):
             obj = {"raw": notice}
-        obj["revoked"] = True
-        obj["revoked_reason"] = "appeal_overturned"
-        obj["current_appeal_state"] = self.appeal_state.get(verdict_key, "")
+        state = self.appeal_state.get(verdict_key, "") or "none"
+        status = self._takedown_status(verdict_key)
+        obj["current_appeal_state"] = state
+        obj["status"] = status
+        obj["revoked"] = status == "revoked"
+        obj["challenged"] = status in ("under_appeal", "revoked")
+        obj["still_enforceable"] = status in ("active", "upheld_on_appeal")
+        if status == "revoked":
+            obj["revoked_reason"] = "appeal_overturned"
         return json.dumps(obj, sort_keys=True)
 
     @gl.public.write
@@ -1716,7 +1743,7 @@ class Contract(gl.Contract):
         )
         self.takedown_notice[verdict_key] = notice
         self.takedown_issued_at[verdict_key] = u256(current)
-        return notice
+        return self._render_takedown(verdict_key, notice)
 
     # ─────────────────────────────────────────────────────────────
     # v10 — Secondary Market: transferable licenses + resale + royalty
@@ -2244,6 +2271,19 @@ class Contract(gl.Contract):
         canonical = canonical_url(normalise_url(suspect_url))
         verdict_key = f"{work_id}:{deterministic_hash(canonical)}"
         return bool(self.takedown_revoked.get(verdict_key, False))
+
+    @gl.public.view
+    def get_takedown_status(self, work_id: str, suspect_url: str) -> str:
+        """v10.2 — live challenge status of a takedown's verdict: one of
+        `active`, `under_appeal`, `revoked`, `upheld_on_appeal`, or
+        `not_issued`. Lets a caller check enforceability without parsing the
+        full notice.
+        """
+        canonical = canonical_url(normalise_url(suspect_url))
+        verdict_key = f"{work_id}:{deterministic_hash(canonical)}"
+        if not self.takedown_notice.get(verdict_key, ""):
+            return "not_issued"
+        return self._takedown_status(verdict_key)
 
     @gl.public.view
     def takedown_ready(self, work_id: str, suspect_url: str) -> str:
