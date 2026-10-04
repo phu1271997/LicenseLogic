@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## 2026-10-04 — Reviewer fixes (v10.1, redeploy)
+
+Contract v10.1 — addresses the reviewer feedback on the cumulative v10
+Secondary Market release. New studionet address
+`0x3084A48279a204c747B02d26fD0CC73F9a880f5D`
+(tx `0xc3ed58b855eb3eb3d5b529a0df34a48f554ce8cd9693eba42f95658912b55064`).
+
+### F1 — Validate license state at every rights/funds-moving entry point
+
+- `list_for_resale`, `transfer_license` and `buy_from_resale` now reject when
+  the seller's license has **expired** (checked against the live epoch).
+- `buy_from_resale` now **re-checks tier transferability at purchase time**,
+  not only at listing time — if the owner turns a tier's transferability off
+  after a listing goes up, the sale is refused before any funds move.
+- All refusals happen before state/funds change, so a rejected call leaves
+  ownership, royalty credits and payment balances exactly as they were.
+- Tests (`tests/test_secondary_market.py`): tier disabled after listing,
+  expired listing purchase, expired list, expired transfer — each asserting
+  balances + ownership unchanged.
+
+### F2 — Default-tier deactivation applies to BOTH purchase methods
+
+- `purchase_license` (legacy) previously fell back to the legacy
+  `license_price` and still sold when `tier_0` was deactivated. It now refuses
+  exactly like `purchase_license_tier`, so deactivating the default tier blocks
+  both paths. Test added for each method.
+
+### F3 — Cross-tier renewal is defined and enforced
+
+- `purchase_license_tier` renewal is now explicit:
+  - same-tier purchase while active → renew / stack the expiry (unchanged);
+  - a still-active license on a **different** tier → **revert** (time bought
+    under one offer can no longer silently become time under another);
+  - an expired license → fresh purchase on the requested tier (the only way to
+    switch tiers), starting the term from the current epoch.
+- Validation runs before funds move. Tests: same-tier renewal stacks,
+  cheap-long → expensive-short switch reverts with state unchanged,
+  switch-after-expiry starts fresh.
+
+### F4 — Takedown notices reflect a later appeal overturn
+
+- New storage `takedown_revoked` + view `is_takedown_revoked`.
+- When `resolve_appeal` overturns a verdict that already had a takedown notice,
+  the notice is flagged revoked. The stored notice string stays immutable
+  (chain of custody); `get_takedown_notice` now surfaces
+  `revoked / revoked_reason / current_appeal_state`.
+- Regression test: scan → issue takedown → file appeal → overturn → notice
+  reads as revoked. Frontend `TakedownPanel` shows a "revoked" badge + banner.
+
 ## 2026-09-21 — Phase 4 Milestone (Secondary Market v10)
 
 Contract v10 (redeploy required). Adds a full on-chain secondary market

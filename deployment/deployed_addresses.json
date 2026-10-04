@@ -1,11 +1,19 @@
 {
   "studionet": {
+    "contract_address": "0x3084A48279a204c747B02d26fD0CC73F9a880f5D",
+    "deployed_at": "2026-10-04T00:00:00+07:00",
+    "deployment_tx_hash": "0xc3ed58b855eb3eb3d5b529a0df34a48f554ce8cd9693eba42f95658912b55064",
+    "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
+    "abi_hash": "PENDING_FILL",
+    "notes": "v10.1 — reviewer-fix release on top of v10 Secondary Market. (1) list_for_resale / transfer_license / buy_from_resale now re-check the seller license is still ACTIVE and the tier still transferable at list, transfer AND purchase time, before moving any rights or funds. (2) Default-tier (tier_0) deactivation now blocks BOTH purchase_license (legacy) and purchase_license_tier — no silent fallback sale. (3) Cross-tier renewal is defined + enforced: same-tier renews/stacks, a still-active license on a different tier REVERTS (no silent re-labelling of bought time), expired licenses may switch tier as a fresh buy. (4) A takedown notice issued before a later appeal now reflects an overturn (takedown_revoked + is_takedown_revoked view; get_takedown_notice surfaces revoked=true). +16 contract tests. See CHANGELOG.md 2026-10-04 section."
+  },
+  "studionet_previous_v10": {
     "contract_address": "0x476Ee007F9bd26b33a5707dB364d7b1D469e86a5",
     "deployed_at": "2026-09-08T00:00:00+07:00",
     "deployment_tx_hash": "0x2ff0fa2e301daac783203263560c0cf5d2fcdbbe6aad6dab48e0437b0ab20a7a",
     "deployer_address": "0x8b563A8c9eeF530300e92E26457D1AB001daEcC7",
     "abi_hash": "PENDING_FILL",
-    "notes": "v10 — Phase 4 Secondary Market bundle. Transferable licenses (per-tier tier_transferable opt-in via set_tier_transferable; transfer_license atomic move), on-chain resale market (list_for_resale / cancel_resale / buy_from_resale payable, buyer must not already hold active license, seller must hold + tier transferable), perpetual creator royalty (set_resale_royalty_bps cap 2000, default 500; royalty routed via _split_credit so coauthor bps apply on every resale hop). New views: get_resale_royalty_bps, get_resale_listing, list_resale_listings, is_tier_transferable. See CHANGELOG.md 2026-09-21 section."
+    "notes": "v10 — Phase 4 Secondary Market bundle. Superseded by the v10.1 reviewer-fix deploy."
   },
   "studionet_previous_v9": {
     "contract_address": "0xcBEaa4e662C911B4D4Fa97869db98d339F1C83A6",
